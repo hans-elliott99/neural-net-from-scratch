@@ -1,11 +1,13 @@
-Neural Network from Scratch - R
+Neural Network from Scratch in Base R
 ================
 Hans Elliott
 3/26/2022
 
 In this document I will attempt to build a neural net from scratch.  
-I am following along to this video: , which is based on this
-[book](https://nnfs.io/). And adapting the code from Python to R.
+I am following along to this [video
+playlist](https://www.youtube.com/watch?v=Wo5dMEP_BbI&list=PLQVvvaa0QuDcjD5BAw2DxE6OF2tius3V3&ab_channel=sentdex),  
+and this excellent [book](https://nnfs.io/),  
+and adapting the code from Python to R.
 
 ## Part 1: Inputs & Outputs
 
@@ -910,4 +912,1288 @@ intialized weights and biases.
 
 # Part 5: The Loss Function
 
-<https://www.youtube.com/watch?v=dEXPMQXoiLc&ab_channel=sentdex>
+To measure the performance of the model, we need some *metric* that
+describes the error, or ‘loss’. For classification tasks,
+**cross-entropy** is the most common loss function, since it captures
+not just the accuracy of the predicted classification but the relative
+confidence (i.e., it considers the predicted *probability*).  
+Specifically, the lower the confidence (the lower the predicted
+probability for a given class), the higher the loss value will be.
+
+**Categorical Cross-Entropy**  
+\[formula\]  
+Simplifies (due to one-hot encoding) to:  
+$ L_i = -log( y\_{i,k} ) $  
+Which is just the negative log of the predicted target class
+probability.  
+(To understand this, watch from
+[here](https://youtu.be/dEXPMQXoiLc?t=493). As a preview, here is a
+screenshot. Keep in mind that in Python, the first index is 0, while it
+is 1 in R).  
+![](imgs/cross-entropy-sc.png)
+
+In code:
+
+``` r
+#Example output values:
+  softmax_output = c(0.1, 0.7, 0.2)
+#Example target value:  (classes: 1, 2, 3)
+  TargetValue = 2
+#One-Hot Encoded
+  target_output = c(0, 1, 0 )
+
+#Calculate Categorical Cross-Entropy
+loss = -(  log(softmax_output[1])*target_output[1] + # = 0
+           log(softmax_output[2])*target_output[2] + # = log(0.7)
+           log(softmax_output[3])*target_output[3]   # = 0
+        )
+loss
+```
+
+    ## [1] 0.3566749
+
+``` r
+#OR
+-log(0.7)
+```
+
+    ## [1] 0.3566749
+
+To implement this into our neural net, we’ll need to adjust so that it
+will work with the batches we train on, since each batch will return a
+batch of (softmax) outputs at the end of the network which match to a
+batch of targets.  
+For example,
+
+    softmax outputs:                 target                 corresponding
+                                      class(1,2,or3):      confidences:                
+        (Neuron1,Neuron2,Neuron3)
+          Class1, Class2, Class3
+    sample1 [0.7,  0.1,  0.2],        [1,                   [0.7,
+    sample2 [0.1,  0.5,  0.4],         2,                    0.5, 
+    sample3 [0.02, 0.9, 0.08]          2]                    0.9]
+
+in R:
+
+``` r
+softmax_output = rbind(c(0.7, 0.1, 0.2),
+                       c(0.1, 0.5, 0.4),
+                       c(0.02, 0.9, 0.08))
+class_target = c(1, 2, 2)
+
+# Select the specific probabilities, based on the sample (the row # of the matrix)
+# and the target class (which corresponds to the neuron that represents that
+# class, and thus the column in the above matrix)
+indices = cbind(1:nrow(softmax_output), class_target)
+softmax_output[indices]
+```
+
+    ## [1] 0.7 0.5 0.9
+
+Now, we can add this into the (simplified) cross-entropy loss function:
+
+``` r
+neg_log = -log(softmax_output[
+        cbind(1:nrow(softmax_output), class_target) #subset
+      ])
+neg_log
+```
+
+    ## [1] 0.3566749 0.6931472 0.1053605
+
+And the loss for this batch is just the average loss:
+
+``` r
+average_loss = mean(neg_log)
+average_loss
+```
+
+    ## [1] 0.3850609
+
+One problem - if we predict confidence (probability) of zero, we would
+find that `-log(0) = -Inf`, which will be unusable as an output. We need
+to make sure this error is avoided, so we can restrict the output to be
+within the bounds of 0.0000001 (`1e-7`) and `1 - 1e-7`:
+
+``` r
+my_clip = function(x, min, max){
+  ifelse(x <= min, min, 
+         ifelse(x >= max, max, x))
+}
+
+#Example
+example_probs = c(0.3566, 0.0, 1)
+my_clip(x = example_probs, min = 1e-7, max = (1-1e-7))
+```
+
+    ## [1] 0.3566000 0.0000001 0.9999999
+
+Review: - Each `[]` represents a neuron. Imagine we have passed forward
+a batch of 1 sample. - Number of output layer neurons = number of
+possible classes - Output layer neurons produce the linear combination
+of weights and biases from all the previous layer’s neurons (which it is
+densely connected to). - This is passed into the softmax activation
+function which effectively provides us with a probability distribution,
+so each output is a value between 0 and 1. These are our label
+predictions, or **y_hat**. - These probabilities are clipped just before
+0 and 1 as a programming hack to avoid an error when calculating loss -
+The clipped values are fed into the loss function. After one-hot
+encoding the TRUE target labels (**y_true**), this is simply the
+negative log of the (clipped) y_hat. - The total loss for the batch is
+just the average of the calculated losses for each sample. (In this
+example, the “batch” is just a single sample, so sample loss = batch
+loss.)
+
+        Final Hidden Layer        Output Layer                                                      
+            []                                    (prob./y_hat)      (calculate sample loss)       
+            []                        [] -softmax->  (0.2)        
+     ....    . (weights + biases)            
+             . ------------------>    [] -softmax->  (0.7)   -clip->  -log(y_hat_clipped) -->
+             .       (dense)
+            []                        [] -softmax->  (0.1)   
+            []
+
+### Update the Function!
+
+Note, we take special steps to ensure that calculating categorical
+cross-entropy will work regardless if the user one-hot encodes the
+target labels (which is common practice, but not universal). See the
+code chunk below to see the logic begind how the inputs need to be
+transformed.
+
+``` r
+### Dense Layers ----
+layer_dense = list(
+## FORWARD PASS FUNCTION 
+ forward = function(inputs, n_neurons){
+   
+  n_inputs = ncol(inputs)
+      #specifies number of inputs based on dims (shape) of the input matrix
+      #should be equal to # of features (i.e, columns) in a sample (i.e, a row)
+  
+  #INITALIZE WEIGHTS AND BIASES
+  weights = matrix(data = (0.10 * rnorm(n = n_inputs*n_neurons)),
+                    nrow = n_inputs, ncol = n_neurons)
+      #Number of weights = the number of inputs*number of neurons. 
+      #(Multipled by 0.10 to keep small.)
+  
+  biases = matrix(data = 0, nrow = 1, ncol = n_neurons)
+      #bias will have shape 1 by number of neurons. we initialize with zeros
+   
+ #FORWARD PASS
+ output = inputs%*%weights + biases[col(inputs%*%weights)]
+ return(output)
+ }
+)
+### Activation Functions ----
+## ReLU
+activation_ReLU = list(
+  forward = function(input_layer){
+
+    output = matrix(sapply(X = input_layer, 
+                    function(X){max(c(0, X))}
+                    ), 
+                  nrow = nrow(input_layer), ncol = ncol(input_layer))
+    #ReLU function coerced into a matrix so the shape
+    #is maintained (it will be equivalent to that of the input shape)
+    return(output)
+  }
+)
+
+## SoftMax
+activation_Softmax = list(
+  forward = function(inputs){
+          #scale inputs
+          max_value = apply(X = inputs, MARGIN = 2,  FUN = max)
+          scaled_inputs = sapply(X = 1:ncol(inputs), 
+                 FUN = function(X){
+                    inputs[,X] - max_value[X]})
+          # exponetiate
+          exp_values = exp(scaled_inputs)
+          # normalize
+          norm_base = matrix(rowSums(exp_values), nrow = nrow(inputs), ncol = 1)
+          probabilities = sapply(X = 1:nrow(inputs),
+                          FUN = function(X){exp_values[X,]/norm_base[X]}) 
+          return(t(probabilities))
+          #(transpose probabilities)
+          }
+)
+
+### Loss ----
+Categorical_CrossEntropy = list(
+forward = function(y_pred = "softmax output", y_true = "targets"){
+    
+    #DETECT NUMBER OF SAMPLES
+    samples = length(y_true)  
+      #gives us the # of samples since y_pred will be a vector of predictions
+      #for each sample
+    
+        #unique_labels = length(unique(y_true))
+        #determines how many unique target labels exist in the y_true 
+    
+    #CLIP SAMPLES TO AVOID -Inf ERROR
+    y_pred_clipped = ifelse(y_pred <= 1e-7, 1e-7, 
+                        ifelse(y_pred >= (1-1e-7), (1-1e-7), y_pred))
+    
+
+    #DETERMINE IF Y_TRUE IS ONE-HOT-ENCODED AND SELECT CORRESPODNING CONFIDENCES
+    confidences = ifelse(nrow(t(y_true)) == 1, 
+                  #if y_true is a single vector of labels, then confidences =
+                    y_pred_clipped[cbind(1:samples, y_true)],
+                      
+                      ifelse(nrow(y_true) > 1,
+                      #else, if y_true is one-hot encoded, then confidences =
+                             rowSums(y_pred_clipped*y_true),
+                             #else
+                             "error indexing the predicted class confidences"
+                             )
+                        )
+                    
+    #CALC LOSS FOR EACH SAMPLE (ROW)
+    neg_log_likelihoods = -log(confidences)
+    return(neg_log_likelihoods)
+    
+  }
+  
+)
+```
+
+What’s going on with the subsetting of the confidences? An example:
+
+``` r
+samples = 3
+y_pred_clipped = rbind(c(0.7, 0.1, 0.2),
+                       c(0.1, 0.5, 0.4),
+                       c(0.02, 0.9, 0.08))
+
+y_true_vec = c(1,2,2)  #(a y_true that is not one-hot encoded)
+y_true_ohe = rbind(c(1, 0, 0), #(a y_true that is one-hot encoded)
+                   c(0, 1, 0),
+                   c(0, 1, 0))
+  
+#IF NOT ONE-HOT ENCODED this subsetting method will work
+y_pred_clipped[cbind(1:samples, y_true_vec)]
+```
+
+    ## [1] 0.7 0.5 0.9
+
+``` r
+# IF ONE_HOT ENCODED we can do this instead
+#(note, this mutltiples the matrix of predicted probs by the one-hot encoded 
+# matrix, which means it will mutliply the values we want by 1 and the wrong 
+# values by 0)
+y_pred_clipped*y_true_ohe
+```
+
+    ##      [,1] [,2] [,3]
+    ## [1,]  0.7  0.0    0
+    ## [2,]  0.0  0.5    0
+    ## [3,]  0.0  0.9    0
+
+``` r
+#Then applying a row sum will help us get rid of the unneccessary zeros
+rowSums(y_pred_clipped*y_true_ohe)
+```
+
+    ## [1] 0.7 0.5 0.9
+
+Okay, now let’s try out the loss function.
+
+``` r
+##Convert inputs to matrix format
+spiral_X = as.matrix(spiral_X)
+
+set.seed(1)
+##Build network
+  # Hidden Layer 1
+  layer1 = layer_dense$forward(inputs = spiral_X, n_neurons = 5) |>
+                  activation_ReLU$forward()
+  # Hidden Layer 2
+  layer2 = layer_dense$forward(inputs = layer1, n_neurons = 4) |>
+                  activation_ReLU$forward()
+  # Output Layer
+    #Important to set n_neurons = 3, since there are 3 classes to predict
+  layer3 = layer_dense$forward(inputs = layer2, n_neurons = 3) |>
+                  activation_Softmax$forward()
+
+# For each sample (corresponding to a row in this output matrix), we have a 
+# prediction for each class (corresponding to the column in this matrix)
+head(layer3)  
+```
+
+    ##           [,1]      [,2]      [,3]
+    ## [1,] 0.3328841 0.3337839 0.3333320
+    ## [2,] 0.3328812 0.3337842 0.3333346
+    ## [3,] 0.3328801 0.3337812 0.3333387
+    ## [4,] 0.3328802 0.3337814 0.3333384
+    ## [5,] 0.3328797 0.3337801 0.3333402
+    ## [6,] 0.3328784 0.3337766 0.3333450
+
+``` r
+#Our true labels are a vector (not one-hot encoded) of labels:
+head(spiral_data$label)
+```
+
+    ## [1] 1 1 1 1 1 1
+
+``` r
+   #CALCULATE LOSS
+  loss = Categorical_CrossEntropy$forward(
+    y_pred = layer3, y_true = spiral_data$label)
+    loss
+```
+
+    ## [1] 1.099961
+
+``` r
+#Let's try one-hot encoding the labels to check our function
+    labels_ohe = do.call(rbind, 
+        lapply(spiral_data$label, 
+               function(i) as.integer(
+                 !is.na(match(unique(
+                   unlist(spiral_data$label)
+                                    ), i)
+                   ))
+              ))
+
+    head(labels_ohe)
+```
+
+    ##      [,1] [,2] [,3]
+    ## [1,]    1    0    0
+    ## [2,]    1    0    0
+    ## [3,]    1    0    0
+    ## [4,]    1    0    0
+    ## [5,]    1    0    0
+    ## [6,]    1    0    0
+
+``` r
+    Categorical_CrossEntropy$forward(y_pred = layer3, y_true = labels_ohe)
+```
+
+    ## [1] 1.099961
+
+``` r
+#Let's try one-hot encoding the labels to check our function
+    labels_ohe = do.call(rbind, 
+        lapply(spiral_data$label, 
+               function(i) as.integer(
+                 !is.na(match(unique(
+                   unlist(spiral_data$label)
+                                    ), i)
+                   ))
+              ))
+```
+
+``` r
+    #y_true_vector = c(1, 2, 2)
+    y_true = rbind(c(1, 0, 0), #(a y_true that is one-hot encoded)
+                   c(0, 1, 0),
+                   c(0, 1, 0))
+
+    anti_ohe = function(y_true){
+               unique_classes = ncol(y_true)
+               samples = nrow(y_true)
+               y_true = as.vector(y_true)
+                    
+               class_key = rep(1:unique_classes, each = samples)
+               y_true = rbind(class_key, y_true)[,y_true==1]
+                              #subset based on one-hot encoding
+                    return(y_true[1,])
+                    }
+    
+    y_true = if(nrow(y_true) > 1){ #if one-hot encoded
+                    #change to sparse
+                    anti_ohe(y_true)
+              }
+```
+
+# Part 6: Optimization & Backpropogation
+
+Now that we can pass data through the neural net, predict classes, and
+have established a clear measurement of the loss or error in our
+predictions, we can begin the process of optimizing the weights and
+biases that manipulate the inputs throughout the network.
+
+WATCH 3B1B!! Notes: Essentially, we will compute the gradient of the
+loss function. The loss function takes as an input the weighted sum of
+all the inputs, weights, and biases, and therefore its gradient is a
+vector of the partial derivates of the loss function with respect to
+each of its inputs. To calculate this, we’ll have to use the **chain
+rule** since we have many nested function. A gradient is a vector (i.e,
+a direction to move) that points in the direction of greatest increase
+of a function. \[Here is an intutitive
+explanation.\](<https://betterexplained.com/articles/vector-calculus-understanding-the-gradient/#>:\~:text=The%20gradient%20is%20a%20fancy,a%20function%20(intuition%20on%20why).  
+We use the negative gradient since we want to minimize loss, not
+increase it (i.e, move down the loss function). The values in this
+vector tell us what nudges we need to make to all of the weight & biases
+in the network in order to make the fastest possible decrease in the
+output of the loss function.  
+Changing the output of any given neuron is possible by changing the
+bias, changing the weights, or changing the activations (outputs) from
+the previous layer. For example, say we want to increase the output of a
+neuron so that its output is closer to the true value. After computing
+the gradient and deciding how to nudge these inputs, we will that the
+biggest strengthening of a connection - i.e, increasing of a weight -
+will happen between the neurons in the prior layer which are most active
+(i.e, have the largest output values) and the ones we want to become
+more active (i.e, our example neuron).  
+I love [3B1B’s example](https://youtu.be/Ilg3gGewQ5U?t=352) here.
+Imagine we are feeding the normalized pixel values of an image of a “2”
+(as in the classic MNIST example) as inputs into a neural net.
+
+                Input Layer    Neuron corresponding to 2
+                      [] 
+                      [] 
+                      []
+     ________          .                    .
+     \_____  \         .                    .
+      /  ____/         .
+     /       \ ------> . --------------->  [] 2
+     \_______ \        .                    .
+             \/        .                    .
+                      []
+                      []
+                      []
+                ("seeing the 2")   ("thinking about a 2")
+
+The neurons “firing” or most active when *seeing the 2* (i.e, relative
+to other neurons they produce the largest output from their activation
+function) get strongly linked (i.e, learn to have the largest weights)
+to the neuron in the next layer which is *thinking about a 2* (i.e, we
+have assigned the neuron to predict “2”). This is the intuition behind
+the common phrase, **“neurons that fire together wire together.”**
+
+This will require some calculus. For those in need of a refresher, the
+[Neural Networks from Scratch in Python](https://nnfs.io/) book provides
+an easy-to-follow explanation. Here is an excerpt: \> “The partial
+derivative is a single equation, and the full multivariate function’s
+derivative consists of a set of equations called the gradient. In other
+words, the gradient is a vector of the size of inputs containing partial
+derivative solutions with respect to each of the inputs.” (Chapter 8)
+
+Beyond the basics of differentiation, partial differentiation, and the
+chain rule, a reminder that I found useful was:  
+*Partial Derivative of a Max Function*  
+$ = 1(x \> y) $. Since the partial derivative of x with respect to x is
+1, then the derivative of this function with respect to x = 1 **if** x
+is greater than y, but equals 0 if y is greater than x. We read the
+output as (x\>y)=1 if true, 0 if false.
+
+Now consider our ReLU function, which is defined as
+![max(x, 0)](https://latex.codecogs.com/png.image?%5Cdpi%7B110%7D&space;%5Cbg_white&space;max%28x%2C%200%29 "max(x, 0)").  
+$ f’(x) = ’(x,0) = 1(x \> 0) $ which equals 1 when x\>0, and 0
+otherwise.
+
+Now let’s try a simplified form of backpropagation as an example. We
+will backpropagate the ReLU function for a single neuron and act as if
+we intend to minimize the output for this single neuron (while in
+reality, we’re minimizing loss not output).  
+It helps to think of the process as a nest of functions, to which we can
+apply the chain rule:  
+$ReLU(+ bias) $, and as seen in the book:  
+![](imgs/backprop-ReLU-sc1.png)
+
+``` r
+x = c(1.0, -2.0, 3.0)  #inputs
+w = c(-3.0, -1.0, 2.0) #weights
+b = 1.0 #bias
+
+#Forward pass inputs and weights to a single neuron, "z"
+xw1 = x[1]*w[1]
+xw2 = x[2]*w[2]
+xw3 = x[3]*w[3]
+
+#Summing weighted inputs and bias
+z = xw1 + xw2 + xw3 + b
+z
+```
+
+    ## [1] 6
+
+``` r
+# Applying ReLU Activation function
+y = max(z, 0)
+y
+```
+
+    ## [1] 6
+
+``` r
+## BACKWARD PASS
+# Assume the neuron receives a gradient of 1 from the next layer 
+  #(i.e, the layer that precedes it in backpropagation)
+
+  #Derivative value from previous layer
+  dvalue = 1
+  
+  #ReLU Derivative
+  drelu_dz = ifelse(z > 0, 1, 0)
+  drelu_dz
+```
+
+    ## [1] 1
+
+``` r
+  #Partial Derivatives of the Sum With Respect to mul(x, w)
+  dsum_dxw1 = 1
+  dsum_dxw2 = 1
+  dsum_dxw3 = 1
+  dsum_db = 1
+
+#Chain rule: Partial derivatives of relu with respect to the xw's
+drelu_dxw1 = drelu_dz * dsum_dxw1
+drelu_dxw2 = drelu_dz * dsum_dxw2
+drelu_dxw3 = drelu_dz * dsum_dxw3
+drelu_db = drelu_dz * dsum_db
+
+#Chain rule: Partial derivative of the mul(x, w) with respect to x, w
+dmul_dx1 = w[1]
+ dmul_dx2 = w[2]
+  dmul_dx3 = w[3]
+dmul_dw1 = x[1]
+ dmul_dw2 = x[2]
+  dmul_dw3 = x[3]
+
+drelu_dx1 = drelu_dxw1 * dmul_dx1
+ drelu_dw1 = drelu_dxw1 * dmul_dw1
+  drelu_dx2 = drelu_dxw2 * dmul_dx2
+drelu_dw2 = drelu_dxw2 * dmul_dw2
+ drelu_dx3 = drelu_dxw3 * dmul_dx3
+  drelu_dw3 = drelu_dxw3 * dmul_dw3
+     
+##GRADIENTS (vectors containing the partial derivatives for each input)
+dx = c(drelu_dx1, drelu_dx2, drelu_dx3)  #gradients on inputs
+dw = c(drelu_dw1, drelu_dw2, drelu_dw3)  #gradients on weights
+db = drelu_db #gradient on bias
+  
+#we can now apply these gradients to the weights minimize the output.
+#"We apply a negative fraction to this gradient since we want to decrease the 
+# final output value, and the gradient shows the direction of the steepest 
+# ascent", rather than descent
+# (this is what an optimizer does)
+
+w[1] = w[1] + -0.001*dw[1]
+w[2] = w[2] + -0.001*dw[2]
+w[3] = w[3] + -0.001*dw[3]
+b = b + -0.001*db
+w; b
+```
+
+    ## [1] -3.001 -0.998  1.997
+
+    ## [1] 0.999
+
+``` r
+#Now that we've slightly tweaked the weights & biases, we can see the effects:
+z = x[1]*w[1] + x[2]*w[2] + x[3]*w[3] + b  #weighted summation
+y = max(z, 0) #apply ReLU
+y  #decreased from 6
+```
+
+    ## [1] 5.985
+
+Let’s consider multiple neurons in the following layer (3). Each neuron
+from the next layer will return a partial derivative of its function
+with respect to this input. The neuron in the current layer will receive
+a vector consisting of these derivatives. We need this to be a singular
+value for a singular neuron, so we will sum the vector.
+
+Now consider if we replace our singular neuron with a layer of neurons.
+Each neuron from the current layer will receive the vector of partial
+derivatives from the following layer, during backpropogation. With a
+layer of neurons, this will be a list of these vectors, or a 2D array.  
+Each neuron outputs a gradient of the partial derivatives with respect
+to all of its inputs. We need to sum along the inputs — the first input
+to all of the neurons, the second input, and so on, meaning we will sum
+by column.
+
+``` r
+#Gradient passed in from the following layer.
+# (corresponds to the gradient vector for a single sample)
+dvalues = c(1, 1, 1)
+
+#3 sets of weights - one for each neuron
+#4 inputs - thus 4 weights in each set
+                #input1,input2,input3,input4
+weights = rbind(c(0.2,    0.8,   -0.5,    1), #neuron1
+                c(0.5,  -0.91,  0.26,  -0.5), #neuron2
+                c(-0.26, -0.27, 0.17,  0.87)  #neuron3
+                ) |> t() #transpose weights
+
+#sum weights and multiply by value passed in from previous layer
+#(we sum by row since we sum across inputs and we have transposed the matrix)
+dx1 = sum(weights[1,]*dvalues)
+dx2 = sum(weights[2,]*dvalues)
+dx3 = sum(weights[3,]*dvalues)
+dx4= sum(weights[4,]*dvalues)
+
+#dinputs = gradient of neuron function with respect to inputs
+dinputs = c(dx1, dx2, dx3, dx4)
+dinputs
+```
+
+    ## [1]  0.44 -0.38 -0.07  1.37
+
+``` r
+#the sum of the multiplication 
+#of the elements is the dot product, so in R we can simplify
+dvalues%*%t(weights)
+```
+
+    ##      [,1]  [,2]  [,3] [,4]
+    ## [1,] 0.44 -0.38 -0.07 1.37
+
+``` r
+###Let's do it with a batch
+#3 gradient vectors means 3 samples in this batch
+dvalues = rbind(c(1, 1, 1),
+                c(2, 2, 2),
+                c(3, 3, 3))
+weights = rbind(c(0.2, 0.8, -0.5, 1),
+                c(0.5, -0.91, 0.26, -0.5),
+                c(-0.26, -0.27, 0.17, 0.87)) |> t() #transpose weights
+# sum weights of given input
+# and multiply by the passed in gradient for this neuron
+dinputs = dvalues%*%t(weights)
+dinputs
+```
+
+    ##      [,1]  [,2]  [,3] [,4]
+    ## [1,] 0.44 -0.38 -0.07 1.37
+    ## [2,] 0.88 -0.76 -0.14 2.74
+    ## [3,] 1.32 -1.14 -0.21 4.11
+
+> “We’re going to be using gradients to update the weights, so we need
+> to match the shape of weights, not inputs. Since the derivative with
+> respect to the weights equals inputs, weights are transposed, so we
+> need to transpose inputs to receive the derivative of the neuron with
+> respect to weights. Then we use these transposed inputs as the first
+> parameter to the dot product — the dot product is going to multiply
+> rows by inputs, where each row, as it is transposed, contains data for
+> a given input for all of the samples, by the columns of dvalues.”
+> (NNFS, Ch. 9)
+
+``` r
+# We have 3 sets of inputs - samples
+inputs = rbind(c(1,    2,    3,   2.5),
+               c(2.,   5.,   -1.,   2),
+               c(-1.5, 2.7, 3.3, -0.8))
+#sum weight of given input
+#dweights = gradient of neuron function with respect to the weights
+dweights = t(inputs)%*%dvalues
+dweights
+```
+
+    ##      [,1] [,2] [,3]
+    ## [1,]  0.5  0.5  0.5
+    ## [2,] 20.1 20.1 20.1
+    ## [3,] 10.9 10.9 10.9
+    ## [4,]  4.1  4.1  4.1
+
+``` r
+#dbiases - sum values across samples 
+dbiases = colSums(dvalues)
+dbiases
+```
+
+    ## [1] 6 6 6
+
+``` r
+#the derivatives with respect to biases come from the sum operation 
+# and always equal 1, multiplied by the incoming gradients 
+#to apply the chain rule.
+#Since gradients are a list of gradients (a vector of gradients for each 
+#neuron for all samples), we just have to sum 
+#them with the neurons, column-wise
+```
+
+For the backward pass, ReLU() receives a gradient of the same shape. The
+derivative of the ReLU function will form an array of the same shape,
+filled with 1 when the related input is greater than 0, and 0 otherwise.
+
+``` r
+#Example layer output
+z = rbind(c(1, 2, -3, -4),
+          c(2, -7, -1, 3),
+          c(-1, 2, 5, -1)
+          )
+
+dvalues = rbind(c(1, 2, 3, 4),
+                c(5, 6, 7, 8),
+                c(9, 10, 11, 12))
+
+#ReLU activation's derivative
+drelu = matrix(data = 0, nrow = nrow(z), ncol = ncol(z)) #fill with zeros
+drelu[z>0] = 1  #change 0 to 1 if the value in z was >1
+
+#Apply chain rule:
+drelu = drelu*dvalues
+
+
+#Since the ReLU derivative is either zero or 1, we can simplify this step
+#into one where we simply change any values in dvalues to 0 if the
+#element that corresponds to it in z is <0
+drelu = dvalues
+drelu[z<=0] = 0
+```
+
+TO REVIEW  
+We’ll minimize ReLU’s output, just for the sake of an example:
+
+``` r
+#Gradient passed in from the following layer.
+dvalues = rbind(c(1, 2, 3, 4),
+                c(5, 6, 7, 8),
+                c(9, 10, 11, 12))
+# We have 3 sets of inputs - 3 samples
+inputs = rbind(c(1,    2,    3,   2.5),
+               c(2.,   5.,   -1.,   2),
+               c(-1.5, 2.7, 3.3, -0.8))
+
+#3 sets of weights - one for each neuron
+#4 inputs - thus 4 weights in each set
+weights = rbind(c(0.2, 0.8, -0.5, 1),        #neuron1
+                c(0.5, -0.91, 0.26, -0.5),   #neuron2
+                c(-0.26, -0.27, 0.17, 0.87)  #neuron3
+                ) |> t() #transpose weights
+#biases - just one for each neuron
+biases = c(2, 3, 0.5)
+
+#FORWARD PASS
+layer_outputs = inputs%*%weights + biases[col(inputs%*%weights)] #Dense Layer
+relu_outputs = sapply(X = layer_outputs, 
+                function(X) max(c(0, X)) ) |> 
+            matrix(nrow = nrow(layer_outputs), ncol = ncol(layer_outputs))
+
+#OPTIMIZE/BACKPROPOGATE
+#relu - simulate derivative with respect to inputs
+drelu = relu_outputs
+drelu[layer_outputs <= 0] = 0
+
+#dense layer
+#dinputs - multiply by weights (w) transposed
+ dinputs = drelu%*%t(weights)
+#dweights - multiply by inputs (x) transposed
+ dweights = t(inputs)%*%drelu
+#dbiases - sum values across samples, which corresponds to neurons, and will
+ #be a colSum
+ dbiases = colSums(drelu)
+
+# Update parameters
+new_weights = weights + -0.001*dweights
+new_biases = biases + -0.001*dbiases
+
+new_weights
+```
+
+    ##           [,1]       [,2]       [,3]
+    ## [1,]  0.179515  0.5003665 -0.2627460
+    ## [2,]  0.742093 -0.9152577 -0.2758402
+    ## [3,] -0.510153  0.2529017  0.1629592
+    ## [4,]  0.971328 -0.5021842  0.8636583
+
+``` r
+new_biases
+```
+
+    ## [1] 1.984890 2.997739 0.497389
+
+That was just an example, where we were updating the weights and biases
+in order to minimize the ReLU output for each neuron, which we won’t be
+doing in practice. But these are essentially the steps we will follow
+during backpropogation. Consider this excerpt:  
+\> “During the backward pass, we’ll calculate the derivative of the loss
+function, and use it to multiply with the derivative of the activation
+function of the output layer, then use this result to multiply by the
+derivative of the output layer, and so on, through all of the hidden
+layers and activation functions. Inside these layers, the derivative
+with respect to the weights and biases will form the gradients that
+we’ll use to update the weights and biases. The derivatives with respect
+to inputs will form the gradient to chain with the previous layer. This
+layer can calculate the impact of its weights and biases on the loss and
+backpropagate gradients on inputs further.” (NNFS, Chapter 9)
+
+We’re also going to need the **Categorical Cross-Entropy loss function
+derivative**, i.e, the partial derivative of the loss function with
+respect to each of its inputs. This simplifies so that *the derivative
+of the loss function with respect to its inputs* (which are the
+predicted values) = *the negative of the ground-truth vector* divided by
+*the vector of predicted values*, or  
+![\\frac{\\partial}{\\partial \\hat y}\[-\\sum y \\cdot log(\\hat y)\] = - \\frac{y}{\\hat y}](https://latex.codecogs.com/png.image?%5Cdpi%7B110%7D&space;%5Cbg_white&space;%5Cfrac%7B%5Cpartial%7D%7B%5Cpartial%20%5Chat%20y%7D%5B-%5Csum%20y%20%5Ccdot%20log%28%5Chat%20y%29%5D%20%3D%20-%20%5Cfrac%7By%7D%7B%5Chat%20y%7D "\frac{\partial}{\partial \hat y}[-\sum y \cdot log(\hat y)] = - \frac{y}{\hat y}")  
+(subscripts excluded).
+
+Finally, we will need the **Softmax activation function derivative**,
+which simplifies to:  
+![](imgs/softmax-derivative-sc.png)
+
+Where
+![S\_{i,j}](https://latex.codecogs.com/png.image?%5Cdpi%7B110%7D&space;%5Cbg_white&space;S_%7Bi%2Cj%7D "S_{i,j}")
+is the j-th Softmax output from the i-th sample,
+![S\_{i,k}](https://latex.codecogs.com/png.image?%5Cdpi%7B110%7D&space;%5Cbg_white&space;S_%7Bi%2Ck%7D "S_{i,k}")
+is the k-th Softmax output for the i-th sample, and
+![\\delta](https://latex.codecogs.com/png.image?%5Cdpi%7B110%7D&space;%5Cbg_white&space;%5Cdelta "\delta")
+is a Kronecker delta function. The Kronecker delta equals 1 when both
+inputs are equal, and 0 otherwise.  
+Simplifying the derivative in this way is done partially to make it
+easier to code. Again, [the book](https://nnfs.io/) has a thorough
+explanation (Ch.9, page 46).
+
+For the left term of the above equation, we need to multiply the softmax
+output with the Kronecker delta. If we visualized the Kronecker delta as
+a 2d array, it would be full of zeros except for 1s on the diagonal,
+where the indices are equal. Therefore, we can convert the softmax
+output vector to be the diagonal of a matrix of zeros:
+
+``` r
+#output for a single sample
+softmax_output = c(0.7, 0.1, 0.2)
+#shape as a list of samples using 'diag' function
+diag(softmax_output)
+```
+
+    ##      [,1] [,2] [,3]
+    ## [1,]  0.7  0.0  0.0
+    ## [2,]  0.0  0.1  0.0
+    ## [3,]  0.0  0.0  0.2
+
+The other part of the equation is
+![S\_{i,j}S\_{i,k}](https://latex.codecogs.com/png.image?%5Cdpi%7B110%7D&space;%5Cbg_white&space;S_%7Bi%2Cj%7DS_%7Bi%2Ck%7D "S_{i,j}S_{i,k}")—
+the multiplication of the Softmax outputs, iterating over the j and k
+indices respectively. We can use the dot product operation for this, and
+transpose the second argument to the row vector form.
+
+``` r
+softmax_output%*%t(softmax_output)
+```
+
+    ##      [,1] [,2] [,3]
+    ## [1,] 0.49 0.07 0.14
+    ## [2,] 0.07 0.01 0.02
+    ## [3,] 0.14 0.02 0.04
+
+And combine these operations:
+
+``` r
+diag(softmax_output) - softmax_output%*%t(softmax_output)
+```
+
+    ##       [,1]  [,2]  [,3]
+    ## [1,]  0.21 -0.07 -0.14
+    ## [2,] -0.07  0.09 -0.02
+    ## [3,] -0.14 -0.02  0.16
+
+Worth noting that the resulting matrix is known as a *Jacobian Matrix*,
+which is a matrix of partial derivatives in all of the combinations of
+both input vectors. In the book, the show how to implement these steps
+into the backpropagation, but also reveal a faster & easier to code
+method. Essentially, **we can combine the derivation of Categorical
+Cross-Entropy derivatives and Softmax activation derivatives by applying
+the chain rule to calculate the partial derivative of the Categorical
+Cross-Entropy loss function with respect to the Softmax function
+inputs.** This simplifies significantly to:  
+$y\_{i,k} - y\_{i,k} $, or the predicted predicted minus the true
+values.  
+We’ll add that as an extra option for an activation function, utilizing
+the other functions we’ve already built, like so:
+
+``` r
+ActivationLoss_SoftmaxCrossEntropy = list(
+  #FORWARD PASS
+  forward = function(inputs, y_true){
+    #output layer's activation function
+    softmax_out = activation_Softmax$forward(inputs)
+    #calculate loss
+    loss = Categorical_CrossEntropy$forward(softmax_out, y_true)
+    return(loss) 
+  },
+  #BACKWARD PASS
+  backward = function(dvalues, y_true){
+    #number of samples
+    samples = length(dvalues)
+    
+    #number of labels
+    labels = length(unique(dvalues[1,]))
+    
+    #if labels are one-hot encoded, turn them discrete values
+    ##helper function
+    anti_ohe = function(y_true){
+               unique_classes = ncol(y_true)
+               samples = nrow(y_true)
+               y_true = as.vector(y_true)
+               class_key = rep(1:unique_classes, each = samples)
+               y_true = rbind(class_key, y_true)[,y_true==1]
+                              #subset based on one-hot encoding
+                    return(y_true[1,])
+                    }
+    
+    y_true = if(is.array(y)){ #if one-hot encoded
+                    #change to sparse
+                    anti_ohe(y_true)
+              } else y_true
+    
+    #Copy so we can modify
+    dinputs = dvalues
+    #Calculate gradient
+    dinputs[1:samples, y_true] = dinputs[1:samples, y_true]-1
+    #Normalize gradient
+    dinputs = dinputs/samples
+  }
+)
+
+#EXAMPLE
+# one hot encoded
+target  =  rbind(c(1,0,0),
+            c(0,1,0),
+            c(0,1,0))
+# not ohe: target = c(1, 2, 2)
+target = if(is.array(target)){ #if one-hot encoded
+                    #change to sparse
+                    anti_ohe(target)
+              } else target
+target
+```
+
+    ## [1] 1 2 2
+
+To implement the solution $y\_{i,k} - y\_{i,k} $ we’re taking advantage
+of the fact that y_true consists of one-hot encoded vectors, which means
+that, for each sample, there is only a singular value of 1 in these
+vectors and the remaining positions are filled with zeros.
+
+Okay, let’s update our function with a backward pass stage. We can add
+in a backwards phase for the dense layers, for the ReLU activation
+function, softmax activation function, for the cross-entropy loss
+function, and for the combined (faster) cross-entropy-softmax
+combination.  
+At this point, translating Python into R is becoming tricker since
+Python’s class based function system seems to make the grouping of
+functions much more fluid. I’ve created some workarounds, specifically
+by having the output of each function be a list of objects. For example,
+during the forward pass we just needed to save the outputs of the
+layer_dense function to pass into the ReLU activation function, and then
+save the outputs of ReLU to pass into the next layer as inputs. But now
+we need to save both the outputs of each of these processes and the
+inputs, which will be needed for backpropagation step.
+
+``` r
+### Dense Layers ----
+layer_dense = list(
+## FORWARD PASS FUNCTION 
+ forward = function(inputs, n_neurons){
+   
+  n_inputs = ncol(inputs)
+      #specifies number of inputs based on dims (shape) of the input matrix
+      #should be equal to # of features (i.e, columns) in a sample (i.e, a row)
+  
+  #Initalize Weights and Biases
+  weights = matrix(data = (0.10 * rnorm(n = n_inputs*n_neurons)),
+                    nrow = n_inputs, ncol = n_neurons)
+      #Number of weights = the number of inputs*number of neurons. 
+      #(Multipled by 0.10 to keep small.)
+  
+  biases = matrix(data = 0, nrow = 1, ncol = n_neurons)
+      #bias will have shape 1 by number of neurons. we initialize with zeros
+   
+ #Forward PAss 
+ output = inputs%*%weights + biases[col(inputs%*%weights)]
+ 
+ #UPDATE: 
+ #need to save the inputs for backprop, so we create a list of objects.
+ 
+ #function saves:
+ list("output" = output, "inputs" = inputs, 
+      "weights"= weights, "biases" = biases)
+ #and prints output by default, but invisibly
+ #invisible(output)
+
+ },
+## BACKWARD PASS
+ backward = function(inputs, weights, dvalues){
+    #Gradients on parameters
+    dweights = t(inputs)%*%dvalues
+    dbiases = colSums(dvalues)
+    #Gradient on values
+    dinputs = dvalues%*%t(weights) 
+ }
+ 
+)
+### Activation Functions ----
+## ReLU
+activation_ReLU = list(
+  #FORWARD PASS
+  forward = function(input_layer){
+    
+    output = matrix(sapply(X = input_layer, 
+                    function(X){max(c(0, X))}
+                    ), 
+                  nrow = nrow(input_layer), ncol = ncol(input_layer))
+    #ReLU function coerced into a matrix so the shape
+    #is maintained (it will be equivalent to that of the input shape)
+    
+    #Function saves:
+    list("output" = output, "inputs" = input_layer)
+    #And prints
+    #invisible(output)
+  },
+  #BACKWARD PASS
+  backward = function(inputs, dvalues){
+    dinputs = dvalues
+    dinputs[inputs <= 0] = 0
+  }
+)
+
+## SoftMax
+activation_Softmax = list(
+  forward = function(inputs){
+          #scale inputs
+          max_value = apply(X = inputs, MARGIN = 2,  FUN = max)
+          scaled_inputs = sapply(X = 1:ncol(inputs), 
+                 FUN = function(X){
+                    inputs[,X] - max_value[X]})
+          # exponetiate
+          exp_values = exp(scaled_inputs)
+          # normalize
+          norm_base = matrix(rowSums(exp_values), nrow = nrow(inputs), ncol = 1)
+          probabilities = sapply(X = 1:nrow(inputs),
+                          FUN = function(X){exp_values[X,]/norm_base[X]}) 
+          return(t(probabilities))
+          #(transpose probabilities)
+          },
+  
+  backward = function(softmax_output, dvalues){
+    #flatten output array
+    flat_output = as.vector(softmax_output)
+    
+    #calculate jacobian matrix of output
+    jacobian_matrix = diag(flat_output) - flat_output%*%t(flat_output)
+    
+    #calculate sample-wise gradient
+    dinputs = jacobian_matrix%*%flat_dvalues
+    
+    
+  }
+)
+
+### Loss ----
+Categorical_CrossEntropy = list(
+  #FORWARD PASS
+  forward = function(y_pred = "softmax output", y_true = "targets"){
+    
+    #DETECT NUMBER OF SAMPLES
+    samples = length(y_true)  
+
+    #CLIP SAMPLES TO AVOID -Inf ERROR
+    y_pred_clipped = ifelse(y_pred <= 1e-7, 1e-7, 
+                        ifelse(y_pred >= (1-1e-7), (1-1e-7), y_pred))
+    
+
+    #DETERMINE IF Y_TRUE IS ONE-HOT-ENCODED AND SELECT CORRESPODNING CONFIDENCES
+    confidences = ifelse(nrow(t(y_true)) == 1, 
+      #if y_true is a single vector of labels (i.e, sparse), then confidences =
+                    y_pred_clipped[cbind(1:samples, y_true)],
+                      
+                      ifelse(nrow(y_true) > 1,
+                      #else, if y_true is one-hot encoded, then confidences =
+                             rowSums(y_pred_clipped*y_true),
+                             #else
+                             "error indexing the predicted class confidences")
+                  )
+                    
+    #CALC LOSS FOR EACH SAMPLE (ROW)
+    neg_log_likelihoods = -log(confidences)
+    return(neg_log_likelihoods)
+    
+  },
+  #BACKWARD PASS
+  backward = function(y_true, dvalues){
+    #number of samples
+    samples = length(dvalues)
+    
+    #number of labels
+    labels = length(unique(dvalues[1,]))
+    
+    #if labels are sparse, turn them into one-hot encoded vector
+    y_true = ifelse(#if
+                    nrow(t(y_true)) ==1,
+                    #one-hot-encode
+                    y_true = do.call(rbind,
+                                     lapply(X = y_true,
+                                       function(X) as.integer(
+                                          !is.na(match(unique(
+                                          unlist(y_true)
+                                                        ), X)
+                                                ))
+                                      )), 
+                    #else
+                    y_true)
+    
+    #calculate gradient
+    dinputs = -y_true/dvalues
+    #normalize gradient
+    dinputs = dinputs/samples
+  }
+)
+#---
+#Softmax X Cross Entropy- combined softmax activation
+# & cross-entropy loss for faster backprop
+activation_loss_SoftmaxCrossEntropy = list(
+  #FORWARD PASS
+  forward = function(inputs, y_true){
+    #output layer's activation function
+    softmax_out = activation_Softmax$forward(inputs)
+    #calculate loss
+    loss = Categorical_CrossEntropy$forward(softmax_out, y_true)
+    return(loss) 
+  },
+  #BACKWARD PASS
+  backward = function(dvalues, y_true){
+    
+    #number of samples
+    if (is.vector(dvalues)) {      #if one sample
+      samples = 1
+    } else if (is.array(dvalues)) {  #else if multiple samples
+      samples = nrow(dvalues)
+    } else print("error checking shape of inputs")
+    
+    
+    
+    #number of labels
+    #labels = length(unique(dvalues[1,]))
+    
+    #if labels are one-hot encoded, turn them discrete values
+     ##helper function
+    anti_ohe = function(y_true){
+               unique_classes = ncol(y_true)
+               samples = nrow(y_true)
+               y_true = as.vector(y_true)
+               class_key = rep(1:unique_classes, each = samples)
+               y_true = rbind(class_key, y_true)[,y_true==1]
+                              #subset based on one-hot encoding
+                    return(y_true[1,])
+                    }
+     ##check & modify
+    y_true = if(is.array(y_true)){ #if one-hot encoded
+                    #change to sparse
+                    anti_ohe(y_true)
+              } else y_true
+    
+    #Copy so we can modify
+     dinputs = dvalues
+    #Calculate gradient
+     #index the prediction array with the sample number and its
+     #true value index, subtracting 1 from these values. Requires discrete,
+     #not one-hot encoded, true labels (explaining the need for the above step)
+     dinputs[cbind(1:samples, y_true)] = dinputs[cbind(1:samples, y_true)] - 1
+    #Normalize gradient
+     dinputs = dinputs/samples
+    #save
+    list("dinputs" = dinputs, "samples" = samples, "y_true" = y_true)
+  }
+)
+```
+
+On normalization of the gradient: optimizers sum all of the gradients
+related to each weight and bias before multiplying them by the learning
+rate, which means that the more samples we have in a dataset, the more
+gradient sets we’ll receive at this step, and the bigger this sum will
+become.  
+To avoid having to adjust the learning rate according to each set of
+samples, we can divide all of the gradients by the number of samples to
+normalize.
+
+Let’s try it. Note that, due to the changes described above, we have to
+use the functions slightly differently, and specify that the output
+object is what we want to pass forward.
+
+HERE
+
+We can now test if the combined backward step returns the same values
+compared to when we backpropagate gradients through both of the
+functions separately… pdf pg/ 233
+
+``` r
+##EXAMPLE: 3 samples
+softmax_outputs = rbind(c(0.7, 0.1, 0.2),
+                        c(0.1, 0.5, 0.4),
+                        c(0.02, 0.9, 0.08))
+class_targets = c(1, 2, 2)
+
+
+# Now we pass in the softmax outputs as the dvalues into the activation/loss
+# function. We can see that it works!
+activation_loss_SoftmaxCrossEntropy$backward(
+    dvalues = softmax_outputs, y_true = class_targets)
+```
+
+    ## $dinputs
+    ##              [,1]        [,2]       [,3]
+    ## [1,] -0.100000000  0.03333333 0.06666667
+    ## [2,]  0.033333333 -0.16666667 0.13333333
+    ## [3,]  0.006666667 -0.03333333 0.02666667
+    ## 
+    ## $samples
+    ## [1] 3
+    ## 
+    ## $y_true
+    ## [1] 1 2 2
+
+``` r
+#Will the slower method work?
+#loss = Categorical_CrossEntropy$backward(y_true = class_targets,
+#                                         dvalues = softmax_outputs)
+  
+###not gonna work...debug or skip.
+```
+
+Now try a full run through:: (pg 237 pdf)
+
+``` r
+##Convert inputs to matrix format
+spiral_X = as.matrix(spiral_X)
+
+set.seed(1)
+##Build network
+  # Hidden Layer 1 - need to specify 'output' object now
+  layer1 = layer_dense$forward(inputs = spiral_X, n_neurons = 5)
+    layer1 = activation_ReLU$forward(layer1$output)
+        head(layer1$output)
+```
+
+    ##              [,1]        [,2] [,3]        [,4]         [,5]
+    ## [1,] 0.0014294573 0.008563134    0 0.003231702 0.0000000000
+    ## [2,] 0.0011747404 0.009612468    0 0.004336414 0.0000000000
+    ## [3,] 0.0000000000 0.006253203    0 0.006120131 0.0003374525
+    ## [4,] 0.0006238029 0.011328948    0 0.006364846 0.0000000000
+    ## [5,] 0.0003256667 0.012058325    0 0.007332336 0.0000000000
+    ## [6,] 0.0000000000 0.005824262    0 0.008545752 0.0016677828
+
+``` r
+  # Hidden Layer 2 - but we can simplify somewhat still & use the pipe
+  layer2 = layer_dense$forward(inputs = layer1$output, n_neurons = 4)$output |>
+      activation_ReLU$forward()
+  
+  # Output Layer
+    #n_neurons = 3, since there are 3 classes to predict
+  layer3 = layer_dense$forward(inputs = layer2$output, n_neurons = 3)$output |>
+      activation_Softmax$forward()
+  
+head(layer3)
+```
+
+    ##           [,1]      [,2]      [,3]
+    ## [1,] 0.3328841 0.3337839 0.3333320
+    ## [2,] 0.3328812 0.3337842 0.3333346
+    ## [3,] 0.3328801 0.3337812 0.3333387
+    ## [4,] 0.3328802 0.3337814 0.3333384
+    ## [5,] 0.3328797 0.3337801 0.3333402
+    ## [6,] 0.3328784 0.3337766 0.3333450
+
+``` r
+   #CALCULATE LOSS
+  loss = Categorical_CrossEntropy$forward(
+    y_pred = layer3, y_true = spiral_data$label)
+    loss
+```
+
+    ## [1] 1.099961
