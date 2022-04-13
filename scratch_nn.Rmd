@@ -1369,23 +1369,51 @@ At this point, translating Python into R is becoming tricker since Python's clas
 - dvalues: the gradient (vector of partial derivatives) being passed backwards from the next layer to the current layer (the layer that is actively backpropagating). _Put simply: the gradient of the subsequent function._
 - dinputs: the gradient that includes the (partial) derivatives of the neuron function with respect to inputs.  
 ```{r NN-add-backprop}
+# initialize_params = function(inputs,n_neurons){
+#   #Initalize Weights and Biases
+#   weights = matrix(data = (0.10 * rnorm(n = n_inputs*n_neurons)),
+#                     nrow = n_inputs, ncol = n_neurons)
+#       #Number of weights = the number of inputs*number of neurons.
+#       #(Random numbers multipled by 0.10 to keep small.)
+# 
+#   biases = matrix(data = 0, nrow = 1, ncol = n_neurons)
+#       #bias will have shape 1 by number of neurons. we initialize with zeros
+#   #save:
+#   list("weights" = weights, "biases"=biases)
+# }
+# a possibility is to initalize random weights&biases outside of the fn
+
+
 ### Dense Layers ----
 layer_dense = list(
 ## FORWARD PASS FUNCTION 
- forward = function(inputs, n_neurons){
+ forward = function(  #default vals for weights/biases are random
+            inputs, 
+            n_neurons, 
+            weights = matrix(data = (0.10 * rnorm(n = ncol(inputs)*n_neurons)),
+                             nrow = ncol(inputs), ncol = n_neurons), 
+            biases = matrix(data = 0, nrow = 1, ncol = n_neurons)
+ ) {#begin fn
    
   n_inputs = ncol(inputs)
-      #specifies number of inputs based on dims (shape) of the input matrix
+      #determine number of inputs per sample from dims of the input matrix
       #should be equal to # of features (i.e, columns) in a sample (i.e, a row)
   
   #Initalize Weights and Biases
-  weights = matrix(data = (0.10 * rnorm(n = n_inputs*n_neurons)),
-                    nrow = n_inputs, ncol = n_neurons)
-      #Number of weights = the number of inputs*number of neurons. 
-      #(Random numbers multipled by 0.10 to keep small.)
-  
-  biases = matrix(data = 0, nrow = 1, ncol = n_neurons)
-      #bias will have shape 1 by number of neurons. we initialize with zeros
+  #if (exists("new_weights")){
+  #  weights = new_weights
+  #} else {
+  #  weights = matrix(data = (0.10 * rnorm(n = n_inputs*n_neurons)),
+  #                   nrow = n_inputs, ncol = n_neurons)
+  #}
+       #Number of weights = the number of inputs*number of neurons. 
+       #(Random numbers multipled by 0.10 to keep small.)
+  #if (exists("new_biases")){
+  #  biases = new_biases
+  #} else {
+  #  biases = matrix(data = 0, nrow = 1, ncol = n_neurons)
+  #}
+       #bias will have shape 1 by number of neurons. we initialize with zeros
    
  #Forward Pass 
  output = inputs%*%weights + biases[col(inputs%*%weights)]
@@ -1649,6 +1677,9 @@ Just remember, during the forward stage, the input of a layer is always just the
 spiral_X = as.matrix(spiral_X)
 
 set.seed(1)
+
+##INITIALIZE WEIGHTS AND BIASES
+
 ##FORWARD PASS
 # Hidden Layer 1 - need to specify 'output' object now
   layer1 = layer_dense$forward(inputs = spiral_X, n_neurons = 5)
@@ -1713,7 +1744,7 @@ In the backwards pass, the object we will be sending (backwards) from step to st
   l2_relu_back = activation_ReLU$backward(inputs = layer2_relu$inputs,
                                          dvalues = out_layer_back$dinputs)
   
- #2.2: Backprop the second hidden layer
+#2.2: Backprop the second hidden layer
   l2_back = layer_dense$backward(inputs  = layer2$inputs,
                                  weights = layer2$weights,
                                  dvalues = l2_relu_back$dinputs
@@ -1724,7 +1755,7 @@ In the backwards pass, the object we will be sending (backwards) from step to st
                                           dvalues = l2_back$dinputs)
     
     
-  #3.2 Backprop the first hidden layer    
+#3.2 Backprop the first hidden layer    
   l1_back = layer_dense$backward(inputs = layer1$inputs,
                                  weights = layer1$weights,
                                  dvalues = l1_relu_back$dinputs)
@@ -1747,7 +1778,172 @@ In the backwards pass, the object we will be sending (backwards) from step to st
 
 # Chapter 10: Optimizers
 (245)
+## Stochastic Gradient Descent (SGD) 
+We can use the gradient that we calculated in the last chapter to adjust weights and biases in order to decrease loss, just beginning the process of optimization. A common and relatively simple way to do this is Stochastic Gradient Descent, where we will essentially subtract a fraction (determined by a _learning rate_) of the gradient for each weight and bias parameter and subtract it from the original weight/bias value.  
+Note: In [NNFS](https://nnfs.io/) Chapter 10, they point out that technically this is Batch Gradient Descent since we're fitting an entire dataset at once (i.e, we have 1 batch, the entire dataset). Later when we switch to fitting just slices of the data at a time (i.e, we have multiple batches) we will technically be performing Mini-batch Gradient Descent.  
+Okay, so let's think of SGD *parameter_values - (learning_rate X paramterer_gradients*).
 
+
+
+Coding the SGD optimizer:
+```{r}
+optimizer_SGD = list(
+  update_params = function(layer_forward, layer_backward, 
+                           learning_rate = 1){ #default value
+    #current params
+    current_weights = layer_forward$weights
+    current_biases = layer_forward$biases
+    #gradients
+    weight_gradients = layer_backward$dweights
+    bias_gradients = layer_backward$dbiases
+    #update
+    weights = current_weights - learning_rate*weight_gradients
+    biases = current_biases - learning_rate*bias_gradients
+      #save:
+      list("weights" = weights, "biases" = biases)
+  }
+)
+```
+
+Let's try an example:
+```{r}
+set.seed(1)
+spiral_X = as.matrix(spiral_X)
+## Forward Pass
+#Hidden Layer
+layer1 = layer_dense$forward(inputs = spiral_X, n_neurons = 64)
+layer1_relu = activation_ReLU$forward(input_layer = layer1$output)
+#Output Layer
+layer2 = layer_dense$forward(inputs = layer1_relu$output,n_neurons = 3)
+output = activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
+                                              y_true = spiral_data$label)
+  loss = output$loss
+    paste("loss:", loss)
+  predictions = max.col(output$softmax_output) 
+  accuracy = mean(predictions==spiral_data$label)
+    paste("accuracy:", accuracy)  
+## Backpropagation
+  loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward(
+                    dvalues = output$softmax_output, 
+                    y_true = spiral_data$label)
+l2_b = layer_dense$backward(inputs = layer2$inputs,
+                               weights = layer2$weights,
+                               dvalues = loss_softm_b$dinputs)
+  l1_relu_b = activation_ReLU$backward(inputs = layer1_relu$inputs,
+                                     dvalues = l2_b$dinputs)     
+l1_b = layer_dense$backward(inputs = layer1$inputs,
+                            weights = layer1$weights,
+                            dvalues = l1_relu_b$dinputs)      
+
+
+#Optimize Layer Parameters
+l1_optim = optimizer_SGD$update_params(layer_forward = layer1,
+                                       layer_backward = l1_b,
+                                       learning_rate = 1)
+l2_optim = optimizer_SGD$update_params(layer_forward = layer2,
+                                       layer_backward = l2_b,
+                                       learning_rate = 1)
+
+#then repeat by passing in the optimized weights & biases into the layers:
+layer1 = layer_dense$forward(inputs = spiral_X, n_neurons = 64,
+                             weights = l1_optim$weights,
+                             biases = l1_optim$biases)
+#and so on...
+```
+We now have everything we need to train the neural net, and we've actually just trained our model for 2 epochs in the above code. (In machine learning, an epoch is the number of passes of the entire dataset that the algorithm has completed.)   
+
+Typically, neural nets are trained for many epochs. The exact number of epochs needed depends on the task. Clearly, to train for more epochs we will want to initialize some kind of loop to avoid repetitively typing out the code.  
+My current struggle is how to randomly initialize the weights for each layer in the first pass, and then continuously update them.  
+The best solution I have so far is to run the first pass manually with random weights (the default), and then set up a loop to run for epochs 2 to n.
+
+```{r}
+set.seed(1)
+#EPOCH 1 - don't specify weights or biases so that they are randomized.
+spiral_X = as.matrix(spiral_X)
+## Forward Pass
+#Hidden Layer
+layer1 = layer_dense$forward(inputs = spiral_X, n_neurons = 64)
+layer1_relu = activation_ReLU$forward(input_layer = layer1$output)
+#Output Layer
+layer2 = layer_dense$forward(inputs = layer1_relu$output,n_neurons = 3)
+output = activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
+                                              y_true = spiral_data$label)
+  loss = output$loss
+    paste("loss:", loss)
+  predictions = max.col(output$softmax_output) 
+  accuracy = mean(predictions==spiral_data$label)
+    paste("accuracy:", accuracy)  
+## Backpropagation
+  loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward(
+                    dvalues = output$softmax_output, 
+                    y_true = spiral_data$label)
+l2_b = layer_dense$backward(inputs = layer2$inputs,
+                               weights = layer2$weights,
+                               dvalues = loss_softm_b$dinputs)
+  l1_relu_b = activation_ReLU$backward(inputs = layer1_relu$inputs,
+                                     dvalues = l2_b$dinputs)     
+l1_b = layer_dense$backward(inputs = layer1$inputs,
+                            weights = layer1$weights,
+                            dvalues = l1_relu_b$dinputs)      
+
+
+#Optimize Layer Parameters
+l1_optim = optimizer_SGD$update_params(layer_forward = layer1,
+                                       layer_backward = l1_b,
+                                       learning_rate = 1)
+l2_optim = optimizer_SGD$update_params(layer_forward = layer2,
+                                       layer_backward = l2_b,
+                                       learning_rate = 1)
+```
+
+
+```{r}
+# EPOCH LOOP
+
+for (epoch in 1:1000) {
+#forward
+layer1 = layer_dense$forward(inputs = spiral_X, n_neurons = 64,
+                             weights = l1_optim$weights,
+                             biases = l1_optim$biases)
+  layer1_relu = activation_ReLU$forward(input_layer = layer1$output)
+layer2 = layer_dense$forward(inputs = layer1_relu$output, n_neurons = 3,
+                             weights = l2_optim$weights,
+                             biases = l2_optim$biases)
+output = 
+  activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
+                                              y_true = spiral_data$label)
+      #metrics:
+      loss = output$loss
+      predictions = max.col(output$softmax_output) 
+      accuracy = mean(predictions==spiral_data$label)
+
+#backward
+  loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward(
+                                      dvalues = output$softmax_output, 
+                                      y_true = spiral_data$label)
+l2_b = layer_dense$backward(inputs = layer2$inputs,
+                            weights = layer2$weights,
+                            dvalues = loss_softm_b$dinputs)
+  l1_relu_b = activation_ReLU$backward(inputs = layer1_relu$inputs,
+                                       dvalues = l2_b$dinputs)     
+l1_b = layer_dense$backward(inputs = layer1$inputs,
+                            weights = layer1$weights,
+                            dvalues = l1_relu_b$dinputs)      
+
+#optimize
+l1_optim = optimizer_SGD$update_params(layer_forward = layer1,
+                                       layer_backward = l1_b,
+                                       learning_rate = 1)
+l2_optim = optimizer_SGD$update_params(layer_forward = layer2,
+                                       layer_backward = l2_b,
+                                       learning_rate = 1)
+#repeat...
+if (epoch != epoch%%100){
+  paste0("epoch: ",epoch,  ", acc: ",accuracy, ", loss: ",loss)}
+
+}
+
+```
 
 
 
