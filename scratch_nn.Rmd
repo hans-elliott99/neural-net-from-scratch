@@ -606,7 +606,10 @@ activation_Softmax = list(
                  FUN = function(X){
                     inputs[,X] - max_value[X]})
           # exponetiate
-          exp_values = exp(scaled_inputs)
+          #NOTE: I add a small decimal here since exp_values will be a 
+          #denominator, and cannot divide by zero. This is a problem I actually
+          #ran into before changing
+          exp_values = exp(scaled_inputs) + 1e-7
           # normalize
           norm_base = matrix(rowSums(exp_values), nrow = nrow(inputs), ncol = 1)
           probabilities = sapply(X = 1:nrow(inputs),
@@ -810,7 +813,7 @@ activation_Softmax = list(
                  FUN = function(X){
                     inputs[,X] - max_value[X]})
           # exponetiate
-          exp_values = exp(scaled_inputs)
+          exp_values = exp(scaled_inputs) + 1e-7
           # normalize
           norm_base = matrix(rowSums(exp_values), nrow = nrow(inputs), ncol = 1)
           probabilities = sapply(X = 1:nrow(inputs),
@@ -1477,10 +1480,12 @@ activation_Softmax = list(
           scaled_inputs = sapply(X = 1:ncol(inputs), 
                  FUN = function(X){
                     inputs[,X] - max_value[X]})
-          # exponetiate
-          exp_values = exp(scaled_inputs)
+          # exponetiate (clip)
+          exp_values = ifelse(exp(scaled_inputs)<=1e-7,1e-7,
+                            ifelse(exp(scaled_inputs>=709),709,exp_values)
           # normalize
-          norm_base = matrix(rowSums(exp_values), nrow = nrow(inputs), ncol = 1)
+          norm_base = matrix(rowSums(exp_values),
+                             nrow = nrow(inputs), ncol = 1)
           probabilities = sapply(X = 1:nrow(inputs),
                           FUN = function(X){exp_values[X,]/norm_base[X]}) 
           return(t(probabilities))
@@ -1678,8 +1683,6 @@ spiral_X = as.matrix(spiral_X)
 
 set.seed(1)
 
-##INITIALIZE WEIGHTS AND BIASES
-
 ##FORWARD PASS
 # Hidden Layer 1 - need to specify 'output' object now
   layer1 = layer_dense$forward(inputs = spiral_X, n_neurons = 5)
@@ -1786,7 +1789,7 @@ Okay, so let's think of SGD *parameter_values - (learning_rate X paramterer_grad
 
 
 Coding the SGD optimizer:
-```{r}
+```{r SGD-optimizer}
 optimizer_SGD = list(
   update_params = function(layer_forward, layer_backward, 
                            learning_rate = 1){ #default value
@@ -1899,8 +1902,9 @@ l2_optim = optimizer_SGD$update_params(layer_forward = layer2,
 
 ```{r}
 # EPOCH LOOP
+tot_epochs = 10000
 
-for (epoch in 1:1000) {
+for (epoch in 1:tot_epochs) {
 #forward
 layer1 = layer_dense$forward(inputs = spiral_X, n_neurons = 64,
                              weights = l1_optim$weights,
@@ -1913,9 +1917,9 @@ output =
   activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
                                               y_true = spiral_data$label)
       #metrics:
-      loss = output$loss
-      predictions = max.col(output$softmax_output) 
-      accuracy = mean(predictions==spiral_data$label)
+      LOSS = output$loss
+      PRED = max.col(output$softmax_output) 
+      ACC = mean(predictions==spiral_data$label)
 
 #backward
   loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward(
@@ -1938,15 +1942,45 @@ l2_optim = optimizer_SGD$update_params(layer_forward = layer2,
                                        layer_backward = l2_b,
                                        learning_rate = 1)
 #repeat...
-if (epoch != epoch%%100){
-  paste0("epoch: ",epoch,  ", acc: ",accuracy, ", loss: ",loss)}
+ if (epoch %in% seq(0,tot_epochs,by=100)){
+        print(epoch)}
 
+
+#        paste0("epoch: ",epoch,  ", acc: ",accuracy, ", loss: ",loss)}
+
+if (epoch==tot_epochs){
+                        out = list("loss"=LOSS,
+                                  "accuracy"=ACC,
+                                  "predictions"=PRED)}
 }
 
 ```
 
 
+```{r}
+out$loss
+out$accuracy
+out$predictions
 
+
+output$softmax_output
+
+```
+
+
+
+```{r}
+tot_epochs = 10000
+for (epoch in 1:tot_epochs){
+ if (epoch %in% seq(0,tot_epochs,by=100)){
+        print(epoch)}#  "acc: ",accuracy, "loss: ",loss)}
+
+}
+
+epoch=10
+accuracy = 112
+loss = 1.1
+```
 
 
 
