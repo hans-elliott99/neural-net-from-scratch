@@ -1286,6 +1286,8 @@ head(spiral_data$label)
 ```
 
 ``` r
+##Make function that turns one-hot encoded array into vector of discrete classes
+
     #y_true_vector = c(1, 2, 2)
     y_true = rbind(c(1, 0, 0), #(a y_true that is one-hot encoded)
                    c(0, 1, 0),
@@ -1294,19 +1296,23 @@ head(spiral_data$label)
     anti_ohe = function(y_true){
                unique_classes = ncol(y_true)
                samples = nrow(y_true)
-               y_true = as.vector(y_true)
+               y_true_vec = as.vector(y_true)
                     
                class_key = rep(1:unique_classes, each = samples)
-               y_true = rbind(class_key, y_true)[,y_true==1]
-                              #subset based on one-hot encoding
-                    return(y_true[1,])
+               y_true = class_key[y_true_vec==1]
+                    #selects the classes that correspond to 1s in y_true vector
+                    return(y_true)
                     }
     
     y_true = if(nrow(y_true) > 1){ #if one-hot encoded
                     #change to sparse
                     anti_ohe(y_true)
               }
+    
+y_true
 ```
+
+    ## [1] 1 2 2
 
 # Part 6: Optimization & Backpropogation
 
@@ -1820,11 +1826,12 @@ ActivationLoss_SoftmaxCrossEntropy = list(
     anti_ohe = function(y_true){
                unique_classes = ncol(y_true)
                samples = nrow(y_true)
-               y_true = as.vector(y_true)
+               y_true_vec = as.vector(y_true)
+                    
                class_key = rep(1:unique_classes, each = samples)
-               y_true = rbind(class_key, y_true)[,y_true==1]
-                              #subset based on one-hot encoding
-                    return(y_true[1,])
+               y_true = class_key[y_true_vec==1]
+                    #selects the classes that correspond to 1s in y_true vector
+                    return(y_true)
                     }
     
     y_true = if(is.array(y)){ #if one-hot encoded
@@ -1841,11 +1848,13 @@ ActivationLoss_SoftmaxCrossEntropy = list(
   }
 )
 
-#EXAMPLE
+
+
+#EXAMPLE of the 
 # one hot encoded
 target  =  rbind(c(1,0,0),
-            c(0,1,0),
-            c(0,1,0))
+                 c(0,1,0),
+                 c(0,1,0))
 # not ohe: target = c(1, 2, 2)
 target = if(is.array(target)){ #if one-hot encoded
                     #change to sparse
@@ -1876,6 +1885,15 @@ save the outputs of ReLU to pass into the next layer as inputs. But now
 we need to save both the outputs of each of these processes and the
 inputs, which will be needed for backpropagation step.
 
+### Update function
+
+**Some Key Terms:**  
+- dvalues: the gradient (vector of partial derivatives) being passed
+backwards from the next layer to the current layer (the layer that is
+actively backpropagating). *Put simply: the gradient of the subsequent
+function.* - dinputs: the gradient that includes the (partial)
+derivatives of the neuron function with respect to inputs.
+
 ``` r
 ### Dense Layers ----
 layer_dense = list(
@@ -1890,12 +1908,12 @@ layer_dense = list(
   weights = matrix(data = (0.10 * rnorm(n = n_inputs*n_neurons)),
                     nrow = n_inputs, ncol = n_neurons)
       #Number of weights = the number of inputs*number of neurons. 
-      #(Multipled by 0.10 to keep small.)
+      #(Random numbers multipled by 0.10 to keep small.)
   
   biases = matrix(data = 0, nrow = 1, ncol = n_neurons)
       #bias will have shape 1 by number of neurons. we initialize with zeros
    
- #Forward PAss 
+ #Forward Pass 
  output = inputs%*%weights + biases[col(inputs%*%weights)]
  
  #UPDATE: 
@@ -1915,6 +1933,10 @@ layer_dense = list(
     dbiases = colSums(dvalues)
     #Gradient on values
     dinputs = dvalues%*%t(weights) 
+    #save:
+    list("dinputs"=dinputs,
+         "dweights"=dweights,
+         "dbiases"=dbiases)
  }
  
 )
@@ -1940,6 +1962,8 @@ activation_ReLU = list(
   backward = function(inputs, dvalues){
     dinputs = dvalues
     dinputs[inputs <= 0] = 0
+    #save:
+    list("dinputs"=dinputs)
   }
 )
 
@@ -1962,6 +1986,7 @@ activation_Softmax = list(
           },
   
   backward = function(softmax_output, dvalues){
+    #*INCOMPLETE SECTION - don't use*
     #flatten output array
     flat_output = as.vector(softmax_output)
     
@@ -2032,6 +2057,7 @@ Categorical_CrossEntropy = list(
     dinputs = -y_true/dvalues
     #normalize gradient
     dinputs = dinputs/samples
+    return(dinputs)
   }
 )
 #---
@@ -2044,33 +2070,33 @@ activation_loss_SoftmaxCrossEntropy = list(
     softmax_out = activation_Softmax$forward(inputs)
     #calculate loss
     loss = Categorical_CrossEntropy$forward(softmax_out, y_true)
-    return(loss) 
+    #function saves:
+    list("softmax_output"=softmax_out, "loss"=loss) 
   },
   #BACKWARD PASS
   backward = function(dvalues, y_true){
     
-    #number of samples
+    #Detect number of samples
     if (is.vector(dvalues)) {      #if one sample
       samples = 1
     } else if (is.array(dvalues)) {  #else if multiple samples
       samples = nrow(dvalues)
     } else print("error checking shape of inputs")
     
-    
-    
-    #number of labels
-    #labels = length(unique(dvalues[1,]))
-    
+    #Reverse One-Hot Encoding
     #if labels are one-hot encoded, turn them discrete values
-     ##helper function
+     ##helper function *******(might be able to implement rowSums/colSums to
+                            #do this cleaner specifically where we need to 
+                            #collapse/get rid of zeros)
     anti_ohe = function(y_true){
                unique_classes = ncol(y_true)
                samples = nrow(y_true)
-               y_true = as.vector(y_true)
+               y_true_vec = as.vector(y_true)
+                    
                class_key = rep(1:unique_classes, each = samples)
-               y_true = rbind(class_key, y_true)[,y_true==1]
-                              #subset based on one-hot encoding
-                    return(y_true[1,])
+               y_true = class_key[y_true_vec==1]
+                    #selects the classes that correspond to 1s in y_true vector
+                    return(y_true)
                     }
      ##check & modify
     y_true = if(is.array(y_true)){ #if one-hot encoded
@@ -2078,16 +2104,17 @@ activation_loss_SoftmaxCrossEntropy = list(
                     anti_ohe(y_true)
               } else y_true
     
-    #Copy so we can modify
-     dinputs = dvalues
     #Calculate gradient
+     #Copy so we can modify
+     dinputs = dvalues
+     #Calculate gradient
      #index the prediction array with the sample number and its
      #true value index, subtracting 1 from these values. Requires discrete,
      #not one-hot encoded, true labels (explaining the need for the above step)
      dinputs[cbind(1:samples, y_true)] = dinputs[cbind(1:samples, y_true)] - 1
-    #Normalize gradient
+     #Normalize gradient
      dinputs = dinputs/samples
-    #save
+    #save desired outputs
     list("dinputs" = dinputs, "samples" = samples, "y_true" = y_true)
   }
 )
@@ -2102,15 +2129,9 @@ To avoid having to adjust the learning rate according to each set of
 samples, we can divide all of the gradients by the number of samples to
 normalize.
 
-Let’s try it. Note that, due to the changes described above, we have to
-use the functions slightly differently, and specify that the output
-object is what we want to pass forward.
-
-HERE
-
 We can now test if the combined backward step returns the same values
 compared to when we backpropagate gradients through both of the
-functions separately… pdf pg/ 233
+functions separately… pdf pg. 233
 
 ``` r
 ##EXAMPLE: 3 samples
@@ -2119,45 +2140,71 @@ softmax_outputs = rbind(c(0.7, 0.1, 0.2),
                         c(0.02, 0.9, 0.08))
 class_targets = c(1, 2, 2)
 
+#Step 1: we would pass inputs into activation_loss_SoftmaxCrossEntropy$forward()
+# - The output corresponds to softmax_outputs
 
-# Now we pass in the softmax outputs as the dvalues into the activation/loss
-# function. We can see that it works!
-activation_loss_SoftmaxCrossEntropy$backward(
-    dvalues = softmax_outputs, y_true = class_targets)
+#Step 2:
+# Now we pass in the softmax outputs as the dvalues into the backward phase of 
+# the loss/activation function.
+backprop = activation_loss_SoftmaxCrossEntropy$backward(
+                        dvalues = softmax_outputs, y_true = class_targets)
+
+backprop$dinputs
 ```
 
-    ## $dinputs
     ##              [,1]        [,2]       [,3]
     ## [1,] -0.100000000  0.03333333 0.06666667
     ## [2,]  0.033333333 -0.16666667 0.13333333
     ## [3,]  0.006666667 -0.03333333 0.02666667
-    ## 
-    ## $samples
-    ## [1] 3
-    ## 
-    ## $y_true
-    ## [1] 1 2 2
 
 ``` r
-#Will the slower method work?
+  #These values match those in the book, so we can see that it worked!
+
+#Step 2.1: What if the class_targets had been one-hot encoded?
+class_targets_ohe = rbind(c(1,0,0),
+                          c(0,1,0),
+                          c(0,1,0))
+backprop2 = activation_loss_SoftmaxCrossEntropy$backward(
+                        dvalues = softmax_outputs, y_true = class_targets)
+backprop2$dinputs
+```
+
+    ##              [,1]        [,2]       [,3]
+    ## [1,] -0.100000000  0.03333333 0.06666667
+    ## [2,]  0.033333333 -0.16666667 0.13333333
+    ## [3,]  0.006666667 -0.03333333 0.02666667
+
+``` r
+  #Same result! (Thanks to the "reverse one-hot encoding" step in the function)
+
+
+  #Will the "slower" method work?
+  #(where we backprop softmax and cross entropy separately)
 #loss = Categorical_CrossEntropy$backward(y_true = class_targets,
 #                                         dvalues = softmax_outputs)
-  
 ###not gonna work...debug or skip.
 ```
 
-Now try a full run through:: (pg 237 pdf)
+### Try on Spiral Data
+
+*Now try a full run through: (pg 237 pdf)* Let’s try it. Note that, due
+to the changes described above, we have to use the functions slightly
+differently, and specify that the “output” object is what we want to
+pass forward. We will be saving other objects in each function in order
+to backpropagate.  
+Just remember, during the forward stage, the input of a layer is always
+just the “output” of the previous layer.
 
 ``` r
 ##Convert inputs to matrix format
 spiral_X = as.matrix(spiral_X)
 
 set.seed(1)
-##Build network
-  # Hidden Layer 1 - need to specify 'output' object now
+##FORWARD PASS
+# Hidden Layer 1 - need to specify 'output' object now
   layer1 = layer_dense$forward(inputs = spiral_X, n_neurons = 5)
-    layer1 = activation_ReLU$forward(layer1$output)
-        head(layer1$output)
+    layer1_relu = activation_ReLU$forward(layer1$output)
+        head(layer1_relu$output)
 ```
 
     ##              [,1]        [,2] [,3]        [,4]         [,5]
@@ -2169,16 +2216,35 @@ set.seed(1)
     ## [6,] 0.0000000000 0.005824262    0 0.008545752 0.0016677828
 
 ``` r
-  # Hidden Layer 2 - but we can simplify somewhat still & use the pipe
-  layer2 = layer_dense$forward(inputs = layer1$output, n_neurons = 4)$output |>
-      activation_ReLU$forward()
+    #Note that we are keeping multiple objects now. We will only pass "output"
+    #But will need the rest for backpropagation
+        names(layer1)
+```
+
+    ## [1] "output"  "inputs"  "weights" "biases"
+
+``` r
+# Hidden Layer 2
+  layer2 = layer_dense$forward(inputs = layer1_relu$output, n_neurons = 4)
+      layer2_relu = activation_ReLU$forward(input_layer = layer2$output)
   
-  # Output Layer
-    #n_neurons = 3, since there are 3 classes to predict
-  layer3 = layer_dense$forward(inputs = layer2$output, n_neurons = 3)$output |>
-      activation_Softmax$forward()
+# Output Layer - Update: we can now use the forward option of the combined
+  # activation_loss function to calculate the softmax outputs of the output
+  # layer AND the loss in one step. Before we would have done:
+  ####
+  #pred = 
+  #   layer_dense$forward(inputs = layer2$output, n_neurons = 3)$output |>
+  #     activation_Softmax$forward()
+  #       head(softmax_output)
+  #loss=Categorical_CrossEntropy$forward(y_pred=pred,y_true=spiral_data$label)
+
+  output_layer = 
+    layer_dense$forward(inputs = layer2_relu$output, n_neurons = 3)
+  output = 
+    activation_loss_SoftmaxCrossEntropy$forward(inputs = output_layer$output,
+                                                y_true = spiral_data$label)
   
-head(layer3)
+  head(output$softmax_output)
 ```
 
     ##           [,1]      [,2]      [,3]
@@ -2190,10 +2256,103 @@ head(layer3)
     ## [6,] 0.3328784 0.3337766 0.3333450
 
 ``` r
-   #CALCULATE LOSS
-  loss = Categorical_CrossEntropy$forward(
-    y_pred = layer3, y_true = spiral_data$label)
-    loss
+##METRICS
+  #CALCULATE LOSS - provide predicted probabilities and ground-truth labels
+  loss = output$loss
+  #determine predictions (returns column index of largest value in each sample,
+  #  corresponding to the class with the hightst predicted probability)
+  predictions = max.col(output$softmax_output) 
+  #calculate accuracy
+  accuracy = mean(predictions == spiral_data$label) 
+    #predictions == sirpal_data$label returns vec of TRUE FALSE, i.e 1 or 0
+    #true labels cannot be one-hot encoded for this step
+  paste("loss =", round(loss, digits = 5)); paste("accuracy =", accuracy)
 ```
 
-    ## [1] 1.099961
+    ## [1] "loss = 1.09996"
+
+    ## [1] "accuracy = 0.35"
+
+In the backwards pass, the object we will be sending (backwards) from
+step to step is what we refer to as “dvlaues”. The dvalues being input
+to any given function will be the dinputs of the step above it.
+
+``` r
+##BACKWARD PASS
+ #1.1 Backpropogate loss & softmax fns (simultaneously)
+  #Calculate the gradient of the output neurons w respect to inputs
+    #(in this case, 'dvalues' is just the softmax outputs)
+  loss_activ_back = activation_loss_SoftmaxCrossEntropy$backward(
+            dvalues = output$softmax_output,
+            y_true = spiral_data$label)
+ #1.2: Backprop the output layer
+  # It will need the inputs it received, the weights it saved, and the
+  # dvalues, which = gradient being passed back from the above ("next") layer
+  out_layer_back = layer_dense$backward(inputs = output_layer$inputs,
+                                     weights = output_layer$weights,
+                                     dvalues = loss_activ_back$dinputs
+                                     )
+ #2.1: Backprop the second hidden layer's activation function
+  l2_relu_back = activation_ReLU$backward(inputs = layer2_relu$inputs,
+                                         dvalues = out_layer_back$dinputs)
+  
+ #2.2: Backprop the second hidden layer
+  l2_back = layer_dense$backward(inputs  = layer2$inputs,
+                                 weights = layer2$weights,
+                                 dvalues = l2_relu_back$dinputs
+                                     )
+  
+  #3.1: Backprop the first hidden layer's activation function
+  l1_relu_back = activation_ReLU$backward(inputs = layer1_relu$inputs,
+                                          dvalues = l2_back$dinputs)
+    
+    
+  #3.2 Backprop the first hidden layer    
+  l1_back = layer_dense$backward(inputs = layer1$inputs,
+                                 weights = layer1$weights,
+                                 dvalues = l1_relu_back$dinputs)
+  
+   
+# Resulting gradients:
+  #Layer 1: (recall, was 5 neurons deep, each connected to 2 "features" - x&y)
+ l1_back$dweights
+```
+
+    ##           [,1]        [,2]          [,3]          [,4]          [,5]
+    ## x 0.0012373058 0.000229596 -0.0002209554 -6.802768e-05  0.0006003745
+    ## y 0.0006668074 0.000121438 -0.0002076131 -3.979536e-04 -0.0008120644
+
+``` r
+ l1_back$dbiases
+```
+
+    ## [1] -0.0001917753  0.0003973362  0.0003197775 -0.0020789469  0.0008553602
+
+``` r
+  #Layer 2: (recall, was 4 neurons deep, each connected to the prior 5 neurons)
+ l2_back$dweights
+```
+
+    ##               [,1]          [,2]          [,3] [,4]
+    ## [1,] -3.935102e-04 -6.539953e-05 -6.604890e-05    0
+    ## [2,] -2.807384e-04 -4.373724e-04  1.332677e-04    0
+    ## [3,]  4.293327e-04  3.917595e-04 -7.382128e-05    0
+    ## [4,]  1.230309e-05 -2.460126e-04  4.911110e-05    0
+    ## [5,]  3.951575e-04  2.336211e-04  1.678983e-05    0
+
+``` r
+ l2_back$dbiases
+```
+
+    ## [1] 0.0034644568 0.0020618635 0.0006035196 0.0000000000
+
+``` r
+ #Which weights are changing the most?
+ apply(l2_back$dweights, 1, which.max)
+```
+
+    ## [1] 4 3 1 3 1
+
+# Chapter 10: Optimizers
+
+245) 
