@@ -533,7 +533,7 @@ norm_values
 ```
 
 **Overflow Error Prevention**  
-Keep in mind that exponentiation can result in some very large numbers and we could run into an overflow error. For example, compare `exp(2)` to `exp(5)`.   
+Keep in mind that exponentiation can result in some very large numbers and we could run into an overflow error. For example, compare `exp(2)` to `exp(5)` to `exp(710)`.     
 To avoid this, we can scale the values so that, for each row, we subtract the largest value in that row from each element.     
 This makes the largest value 0, and all others negative, so that the exponentiated values lie between 0 and 1.   
 We will implement this when we incorporate Softmax into our NN function. It can be achieved easily with R's 'apply'.
@@ -546,10 +546,13 @@ max_value = apply(X = some_layer_outputs, MARGIN = 2,
 # Subtract max col value from each element in corresponding column
 sapply(X = 1:ncol(some_layer_outputs), 
        FUN = function(X){
-              some_layer_outputs[,X] - max_value[X] 
+              some_layer_outputs[,X] - abs(max_value[X]) 
               #select column, subtract corresponding maximum
                   }
        )
+##NOTE: important to take the absolute value of max_value[X] since if we have
+# a negative value for the max_value, subtracting by it will actually add it to
+# the "some_layer_outputs" and we could run back into the overflow error.
 ```
 
 
@@ -604,12 +607,9 @@ activation_Softmax = list(
           max_value = apply(X = inputs, MARGIN = 2,  FUN = max)
           scaled_inputs = sapply(X = 1:ncol(inputs), 
                  FUN = function(X){
-                    inputs[,X] - max_value[X]})
+                    inputs[,X] - abs(max_value[X])})
           # exponetiate
-          #NOTE: I add a small decimal here since exp_values will be a 
-          #denominator, and cannot divide by zero. This is a problem I actually
-          #ran into before changing
-          exp_values = exp(scaled_inputs) + 1e-7
+          exp_values = exp(scaled_inputs)
           # normalize
           norm_base = matrix(rowSums(exp_values), nrow = nrow(inputs), ncol = 1)
           probabilities = sapply(X = 1:nrow(inputs),
@@ -811,9 +811,9 @@ activation_Softmax = list(
           max_value = apply(X = inputs, MARGIN = 2,  FUN = max)
           scaled_inputs = sapply(X = 1:ncol(inputs), 
                  FUN = function(X){
-                    inputs[,X] - max_value[X]})
+                    inputs[,X] - abs(max_value[X])})
           # exponetiate
-          exp_values = exp(scaled_inputs) + 1e-7
+          exp_values = exp(scaled_inputs)
           # normalize
           norm_base = matrix(rowSums(exp_values), nrow = nrow(inputs), ncol = 1)
           probabilities = sapply(X = 1:nrow(inputs),
@@ -1479,10 +1479,9 @@ activation_Softmax = list(
           max_value = apply(X = inputs, MARGIN = 2,  FUN = max)
           scaled_inputs = sapply(X = 1:ncol(inputs), 
                  FUN = function(X){
-                    inputs[,X] - max_value[X]})
-          # exponetiate (clip)
-          exp_values = ifelse(exp(scaled_inputs)<=1e-7,1e-7,
-                            ifelse(exp(scaled_inputs>=709),709,exp_values)
+                    inputs[,X] - abs(max_value[X])})
+          # exponetiate
+          exp_values = exp(scaled_inputs)
           # normalize
           norm_base = matrix(rowSums(exp_values),
                              nrow = nrow(inputs), ncol = 1)
@@ -1857,133 +1856,4 @@ We now have everything we need to train the neural net, and we've actually just 
 
 Typically, neural nets are trained for many epochs. The exact number of epochs needed depends on the task. Clearly, to train for more epochs we will want to initialize some kind of loop to avoid repetitively typing out the code.  
 My current struggle is how to randomly initialize the weights for each layer in the first pass, and then continuously update them.  
-The best solution I have so far is to run the first pass manually with random weights (the default), and then set up a loop to run for epochs 2 to n.
-
-```{r}
-set.seed(1)
-#EPOCH 1 - don't specify weights or biases so that they are randomized.
-spiral_X = as.matrix(spiral_X)
-## Forward Pass
-#Hidden Layer
-layer1 = layer_dense$forward(inputs = spiral_X, n_neurons = 64)
-layer1_relu = activation_ReLU$forward(input_layer = layer1$output)
-#Output Layer
-layer2 = layer_dense$forward(inputs = layer1_relu$output,n_neurons = 3)
-output = activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
-                                              y_true = spiral_data$label)
-  loss = output$loss
-    paste("loss:", loss)
-  predictions = max.col(output$softmax_output) 
-  accuracy = mean(predictions==spiral_data$label)
-    paste("accuracy:", accuracy)  
-## Backpropagation
-  loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward(
-                    dvalues = output$softmax_output, 
-                    y_true = spiral_data$label)
-l2_b = layer_dense$backward(inputs = layer2$inputs,
-                               weights = layer2$weights,
-                               dvalues = loss_softm_b$dinputs)
-  l1_relu_b = activation_ReLU$backward(inputs = layer1_relu$inputs,
-                                     dvalues = l2_b$dinputs)     
-l1_b = layer_dense$backward(inputs = layer1$inputs,
-                            weights = layer1$weights,
-                            dvalues = l1_relu_b$dinputs)      
-
-
-#Optimize Layer Parameters
-l1_optim = optimizer_SGD$update_params(layer_forward = layer1,
-                                       layer_backward = l1_b,
-                                       learning_rate = 1)
-l2_optim = optimizer_SGD$update_params(layer_forward = layer2,
-                                       layer_backward = l2_b,
-                                       learning_rate = 1)
-```
-
-
-```{r}
-# EPOCH LOOP
-tot_epochs = 10000
-
-for (epoch in 1:tot_epochs) {
-#forward
-layer1 = layer_dense$forward(inputs = spiral_X, n_neurons = 64,
-                             weights = l1_optim$weights,
-                             biases = l1_optim$biases)
-  layer1_relu = activation_ReLU$forward(input_layer = layer1$output)
-layer2 = layer_dense$forward(inputs = layer1_relu$output, n_neurons = 3,
-                             weights = l2_optim$weights,
-                             biases = l2_optim$biases)
-output = 
-  activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
-                                              y_true = spiral_data$label)
-      #metrics:
-      LOSS = output$loss
-      PRED = max.col(output$softmax_output) 
-      ACC = mean(predictions==spiral_data$label)
-
-#backward
-  loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward(
-                                      dvalues = output$softmax_output, 
-                                      y_true = spiral_data$label)
-l2_b = layer_dense$backward(inputs = layer2$inputs,
-                            weights = layer2$weights,
-                            dvalues = loss_softm_b$dinputs)
-  l1_relu_b = activation_ReLU$backward(inputs = layer1_relu$inputs,
-                                       dvalues = l2_b$dinputs)     
-l1_b = layer_dense$backward(inputs = layer1$inputs,
-                            weights = layer1$weights,
-                            dvalues = l1_relu_b$dinputs)      
-
-#optimize
-l1_optim = optimizer_SGD$update_params(layer_forward = layer1,
-                                       layer_backward = l1_b,
-                                       learning_rate = 1)
-l2_optim = optimizer_SGD$update_params(layer_forward = layer2,
-                                       layer_backward = l2_b,
-                                       learning_rate = 1)
-#repeat...
- if (epoch %in% seq(0,tot_epochs,by=100)){
-        print(epoch)}
-
-
-#        paste0("epoch: ",epoch,  ", acc: ",accuracy, ", loss: ",loss)}
-
-if (epoch==tot_epochs){
-                        out = list("loss"=LOSS,
-                                  "accuracy"=ACC,
-                                  "predictions"=PRED)}
-}
-
-```
-
-
-```{r}
-out$loss
-out$accuracy
-out$predictions
-
-
-output$softmax_output
-
-```
-
-
-
-```{r}
-tot_epochs = 10000
-for (epoch in 1:tot_epochs){
- if (epoch %in% seq(0,tot_epochs,by=100)){
-        print(epoch)}#  "acc: ",accuracy, "loss: ",loss)}
-
-}
-
-epoch=10
-accuracy = 112
-loss = 1.1
-```
-
-
-
-
-
-
+The best solution I have so far is to run the first pass manually with random weights (the default), and then set up a loop to run for epochs 2 to n.  

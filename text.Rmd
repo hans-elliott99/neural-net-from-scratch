@@ -1,0 +1,443 @@
+---
+title: "part2"
+author: "Hans Elliott"
+date: "4/13/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r sim-data}
+## Creating Data
+# Source:
+N = 33 # number of points per class
+D = 2 # dimensionality
+K = 3 # number of classes
+X = data.frame() # data matrix (each row = single example)
+y = data.frame() # class labels
+ 
+set.seed(123)
+ 
+for (j in (1:K)){
+  r = seq(0.05,1,length.out = N) # radius
+  t = seq((j-1)*4.7,j*4.7, length.out = N) + rnorm(N, sd = 0.3) # theta
+  Xtemp = data.frame(x =r*sin(t) , y = r*cos(t)) 
+  ytemp = data.frame(matrix(j, N, 1))
+  X = rbind(X, Xtemp)
+  y = rbind(y, ytemp)
+}
+spiral_data = cbind(X,y)
+colnames(spiral_data) = c(colnames(X), 'label')
+
+spiral_X = spiral_data[,c("x","y")]
+
+#plot(spiral_data$x, spiral_data$y, col = spiral_data$label)
+
+
+```
+
+```{r}
+### Initialize Parameters
+init_params = function(){
+        
+    weights = matrix(data = (0.10 * rnorm(n = ncol(inputs)*n_neurons)),
+                             nrow = ncol(inputs), ncol = n_neurons)
+           #Number of weights = the number of inputs*number of neurons,
+           #since every connection between the previous neurons (from input) and
+           #the current neurons have an associated weight
+    biases = matrix(data = 0, nrow = 1, ncol = n_neurons)
+           #Number of biases = the number
+}
+
+
+### Dense Layers ----
+layer_dense = list(
+## FORWARD PASS FUNCTION 
+ forward = function(    #default vals for weights/biases are random
+            inputs, 
+            n_neurons, 
+            weights = 
+                matrix(data = (0.10 * rnorm(n = ncol(inputs)*n_neurons)),
+                             nrow = ncol(inputs), ncol = n_neurons), 
+            biases = 
+                matrix(data = 0, nrow = 1, ncol = n_neurons)
+ ) {#begin fn
+   
+  n_inputs = ncol(inputs)
+      #determine number of inputs per sample from dims of the input matrix
+      #should be equal to # of features (i.e, columns) in a sample (i.e, a row)
+  
+  #Initalize Weights and Biases
+  #if (exists("new_weights")){
+  #  weights = new_weights
+  #} else {
+  #  weights = matrix(data = (0.10 * rnorm(n = n_inputs*n_neurons)),
+  #                   nrow = n_inputs, ncol = n_neurons)
+  #}
+       #Number of weights = the number of inputs*number of neurons. 
+       #(Random numbers multipled by 0.10 to keep small.)
+  #if (exists("new_biases")){
+  #  biases = new_biases
+  #} else {
+  #  biases = matrix(data = 0, nrow = 1, ncol = n_neurons)
+  #}
+       #bias will have shape 1 by number of neurons. we initialize with zeros
+   
+ #Forward Pass 
+ output = inputs%*%weights + biases[col(inputs%*%weights)]
+ 
+ #UPDATE: 
+ #need to save the inputs for backprop, so we create a list of objects.
+ 
+ #function saves:
+ list("output" = output, "inputs" = inputs, 
+      "weights"= weights, "biases" = biases)
+ #and prints output by default, but invisibly
+ #invisible(output)
+
+ },
+## BACKWARD PASS
+ backward = function(inputs, weights, dvalues){
+    #Gradients on parameters
+    dweights = t(inputs)%*%dvalues
+    dbiases = colSums(dvalues)
+    #Gradient on values
+    dinputs = dvalues%*%t(weights) 
+    #save:
+    list("dinputs"=dinputs,
+         "dweights"=dweights,
+         "dbiases"=dbiases)
+ }
+ 
+)
+### Activation Functions ----
+## ReLU
+activation_ReLU = list(
+  #FORWARD PASS
+  forward = function(input_layer){
+    
+    output = matrix(sapply(X = input_layer, 
+                    function(X){max(c(0, X))}
+                    ), 
+                  nrow = nrow(input_layer), ncol = ncol(input_layer))
+    #ReLU function coerced into a matrix so the shape
+    #is maintained (it will be equivalent to that of the input shape)
+    
+    #Function saves:
+    list("output" = output, "inputs" = input_layer)
+    #And prints
+    #invisible(output)
+  },
+  #BACKWARD PASS
+  backward = function(inputs, dvalues){
+    dinputs = dvalues
+    dinputs[inputs <= 0] = 0
+    #save:
+    list("dinputs"=dinputs)
+  }
+)
+
+## SoftMax
+activation_Softmax = list(
+  forward = function(inputs){
+          #scale inputs
+          max_value = apply(X = inputs, MARGIN = 2,  FUN = max)
+          scaled_inputs = sapply(X = 1:ncol(inputs), 
+                 FUN = function(X){
+                    inputs[,X] - abs(max_value[X])})
+
+          # exponetiate
+          exp_values = exp(scaled_inputs)
+          #exp_values = ifelse(exp(scaled_inputs)<=1e-7,1e-7,
+          #                  ifelse(scaled_inputs>=,exp(709),#else
+          #                         exp_values))
+          # normalize
+          norm_base = matrix(rowSums(exp_values),
+                             nrow = nrow(inputs), ncol = 1)
+          probabilities = sapply(X = 1:nrow(inputs),
+                          FUN = function(X){exp_values[X,]/norm_base[X]}) 
+          return(t(probabilities))
+          #(transpose probabilities)
+          },
+  
+  backward = function(softmax_output, dvalues){
+    #*INCOMPLETE SECTION - don't use*
+    #flatten output array
+    flat_output = as.vector(softmax_output)
+    
+    #calculate jacobian matrix of output
+    jacobian_matrix = diag(flat_output) - flat_output%*%t(flat_output)
+    
+    #calculate sample-wise gradient
+    dinputs = jacobian_matrix%*%flat_dvalues
+    
+    
+  }
+)
+
+### Loss ----
+Categorical_CrossEntropy = list(
+  #FORWARD PASS
+  forward = function(y_pred = "softmax output", y_true = "targets"){
+    
+    #DETECT NUMBER OF SAMPLES
+    samples = length(y_true)  
+
+    #CLIP SAMPLES TO AVOID -Inf ERROR
+    y_pred_clipped = ifelse(y_pred <= 1e-7, 1e-7, 
+                        ifelse(y_pred >= (1-1e-7), (1-1e-7), y_pred))
+    
+
+    #DETERMINE IF Y_TRUE IS ONE-HOT-ENCODED AND SELECT CORRESPODNING CONFIDENCES
+    confidences = ifelse(nrow(t(y_true)) == 1, 
+      #if y_true is a single vector of labels (i.e, sparse), then confidences =
+                    y_pred_clipped[cbind(1:samples, y_true)],
+                      
+                      ifelse(nrow(y_true) > 1,
+                      #else, if y_true is one-hot encoded, then confidences =
+                             rowSums(y_pred_clipped*y_true),
+                             #else
+                             "error indexing the predicted class confidences")
+                  )
+                    
+    #CALC LOSS FOR EACH SAMPLE (ROW)
+    neg_log_likelihoods = -log(confidences)
+    return(neg_log_likelihoods)
+    
+  },
+  #BACKWARD PASS
+  backward = function(y_true, dvalues){
+    #number of samples
+    samples = length(dvalues)
+    
+    #number of labels
+    labels = length(unique(dvalues[1,]))
+    
+    #if labels are sparse, turn them into one-hot encoded vector
+    y_true = ifelse(#if
+                    nrow(t(y_true)) ==1,
+                    #one-hot-encode
+                    y_true = do.call(rbind,
+                                     lapply(X = y_true,
+                                       function(X) as.integer(
+                                          !is.na(match(unique(
+                                          unlist(y_true)
+                                                        ), X)
+                                                ))
+                                      )), 
+                    #else
+                    y_true)
+    
+    #calculate gradient
+    dinputs = -y_true/dvalues
+    #normalize gradient
+    dinputs = dinputs/samples
+    return(dinputs)
+  }
+)
+#---
+#Softmax X Cross Entropy- combined softmax activation
+# & cross-entropy loss for faster backprop
+activation_loss_SoftmaxCrossEntropy = list(
+  #FORWARD PASS
+  forward = function(inputs, y_true){
+    #output layer's activation function
+    softmax_out = activation_Softmax$forward(inputs)
+    #calculate loss
+    loss = Categorical_CrossEntropy$forward(softmax_out, y_true)
+    #function saves:
+    list("softmax_output"=softmax_out, "loss"=loss) 
+  },
+  #BACKWARD PASS
+  backward = function(dvalues, y_true){
+    
+    #Detect number of samples
+    if (is.vector(dvalues)) {      #if one sample
+      samples = 1
+    } else if (is.array(dvalues)) {  #else if multiple samples
+      samples = nrow(dvalues)
+    } else print("error checking shape of inputs")
+    
+    #Reverse One-Hot Encoding
+    #if labels are one-hot encoded, turn them discrete values
+     ##helper function *******(might be able to implement rowSums/colSums to
+                            #do this cleaner specifically where we need to 
+                            #collapse/get rid of zeros)
+    anti_ohe = function(y_true){
+               unique_classes = ncol(y_true)
+               samples = nrow(y_true)
+               y_true_vec = as.vector(y_true)
+                    
+               class_key = rep(1:unique_classes, each = samples)
+               y_true = class_key[y_true_vec==1]
+                    #selects the classes that correspond to 1s in y_true vector
+                    return(y_true)
+                    }
+     ##check & modify
+    y_true = if(is.array(y_true)){ #if one-hot encoded
+                    #change to sparse
+                    anti_ohe(y_true)
+              } else y_true
+    
+    #Calculate gradient
+     #Copy so we can modify
+     dinputs = dvalues
+     #Calculate gradient
+     #index the prediction array with the sample number and its
+     #true value index, subtracting 1 from these values. Requires discrete,
+     #not one-hot encoded, true labels (explaining the need for the above step)
+     dinputs[cbind(1:samples, y_true)] = dinputs[cbind(1:samples, y_true)] - 1
+     #Normalize gradient
+     dinputs = dinputs/samples
+    #save desired outputs
+    list("dinputs" = dinputs, "samples" = samples, "y_true" = y_true)
+  }
+)
+
+```
+
+
+```{r SGD-optimizer}
+optimizer_SGD = list(
+  update_params = function(layer_forward, layer_backward, 
+                           learning_rate = 1){ #default value
+    #current params
+    current_weights = layer_forward$weights
+    current_biases = layer_forward$biases
+    #gradients
+    weight_gradients = layer_backward$dweights
+    bias_gradients = layer_backward$dbiases
+    #update
+    weights = current_weights - learning_rate*weight_gradients
+    biases = current_biases - learning_rate*bias_gradients
+      #save:
+      list("weights" = weights, "biases" = biases)
+  }
+)
+```
+
+**EPOCH 1**
+
+```{r}
+set.seed(1)
+#EPOCH 1 - don't specify weights or biases so that they are randomized.
+spiral_X = as.matrix(spiral_X)
+## Forward Pass
+#Hidden Layer
+layer1 = layer_dense$forward(inputs = spiral_X, n_neurons = 64)
+  layer1_relu = activation_ReLU$forward(input_layer = layer1$output)
+#Output Layer
+    layer2 = layer_dense$forward(inputs = layer1_relu$output,n_neurons = 3)
+        output1 = 
+          activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
+                                              y_true = spiral_data$label)
+          loss = output1$loss
+          paste("loss:", loss)
+          predictions = max.col(output1$softmax_output) 
+          accuracy = mean(predictions==spiral_data$label)
+          paste("accuracy:", accuracy)  
+## Backpropagation
+        loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward(
+                    dvalues = output1$softmax_output, 
+                    y_true = spiral_data$label)
+    l2_b = layer_dense$backward(inputs = layer2$inputs,
+                               weights = layer2$weights,
+                               dvalues = loss_softm_b$dinputs)
+  l1_relu_b = activation_ReLU$backward(inputs = layer1_relu$inputs,
+                                     dvalues = l2_b$dinputs)     
+l1_b = layer_dense$backward(inputs = layer1$inputs,
+                            weights = layer1$weights,
+                            dvalues = l1_relu_b$dinputs)      
+
+
+#Optimize Layer Parameters
+l1_optim = optimizer_SGD$update_params(layer_forward = layer1,
+                                       layer_backward = l1_b,
+                                       learning_rate = 1)
+l2_optim = optimizer_SGD$update_params(layer_forward = layer2,
+                                       layer_backward = l2_b,
+                                       learning_rate = 1)
+```
+
+**EPOCH LOOP**  
+```{r}
+# EPOCH LOOP
+tot_epochs = 2000
+
+for (epoch in 1:tot_epochs) {
+#forward
+layer1 = layer_dense$forward(inputs = spiral_X, n_neurons = 64,
+                                    weights = l1_optim$weights,
+                                      biases = l1_optim$biases)
+  layer1_relu = activation_ReLU$forward(input_layer = layer1$output)
+      layer2 = layer_dense$forward(inputs = layer1_relu$output, n_neurons = 3,
+                                                   weights = l2_optim$weights,
+                                                     biases = l2_optim$biases)
+          output = 
+          activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
+                                                  y_true = spiral_data$label)
+              #metrics:
+              LOSS = output$loss
+              PRED = max.col(output$softmax_output, ties.method = "random") 
+              ACC = mean(PRED==spiral_data$label)
+
+          #backward
+          loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward(
+                                      dvalues = output$softmax_output, 
+                                      y_true = spiral_data$label)
+      l2_b = layer_dense$backward(inputs = layer2$inputs,
+                            weights = layer2$weights,
+                            dvalues = loss_softm_b$dinputs)
+  l1_relu_b = activation_ReLU$backward(inputs = layer1_relu$inputs,
+                                       dvalues = l2_b$dinputs)     
+l1_b = layer_dense$backward(inputs = layer1$inputs,
+                            weights = layer1$weights,
+                            dvalues = l1_relu_b$dinputs)      
+
+#optimize
+l1_optim = optimizer_SGD$update_params(layer_forward = layer1,
+                                       layer_backward = l1_b,
+                                       learning_rate = 1)
+l2_optim = optimizer_SGD$update_params(layer_forward = layer2,
+                                       layer_backward = l2_b,
+                                       learning_rate = 1)
+
+  #repeat...
+  
+#Status Report:
+  if (epoch == 1){print(c("epoch","errors","loss","accuracy"))}
+  if (epoch %in% seq(0,tot_epochs,by=100)){
+        print(c( epoch, 
+                 sum(is.nan(output$softmax_output)),#make sure NaN error is gone
+                 LOSS,
+                 ACC) )}
+
+
+#Save Final Metrics:
+  if (epoch==tot_epochs){
+  out = list("loss"=LOSS,
+             "accuracy"=ACC,
+             "predictions"=PRED)}
+}#end loop
+```
+
+
+```{r}
+out$loss
+out$accuracy
+out$predictions
+```
+Wow! Our neural net was able to perfectly learn the labels of the spiral data in under 1000 epochs.  
+
+
+```{r}
+#Actual
+plot(spiral_data$x, spiral_data$y, col = spiral_data$label)
+#Predicted
+plot(spiral_data$x, spiral_data$y, col = out$predictions)
+```
+
+
+
