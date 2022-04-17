@@ -7,8 +7,8 @@ output:
     toc: true
     theme: united
     code_folding: show
-    #includes:
-      #after_body: footer.html
+    includes:
+      after_body: footer.html
 ---
 
 ```{r setup, include=FALSE}
