@@ -570,11 +570,13 @@ The learning rate decreases quite quickly, but this seems to work. Rather than l
 ## Momentum
 Momentum allows the size and direction of each "downward" step in gradient descent to depend upon the size and direction of prior steps. This can help the model pass through local loss minimums, making it more likely that a global minimum is found. I find this easiest to understand [visually](https://nnfs.io/jog/). You can see how the change in the loss function "speeds up" when loss is decreasing rapidly, and slows down when loss starts increasing.  
 To actually implement this method, we will allow some fraction of the previous parameter updates (i.e, the changes to weights & biases) to be combined with a fraction of the current parameter updates. Thus, the portion of the gradient from preceding steps - the direction of change decided in previous epochs - determines the actual momentum.  
-Now, we can add this as a hyperparameter. Due to how I am executing my loop and updating parameters within the loop, I've decided to implement momentum as an option in the paramter initialization function. If set to `TRUE`, the function will generate a matrix of zeros of the right shape.
+
+Now, we can add this as a hyperparameter. Due to how I am executing my loop and updating parameters within the loop, I've decided to implement momentum as an option in the paramter initialization function. If set to `TRUE`, the function will generate a matrix of zeros of the right shape. Also notice that I've added a cache option using the same methodology. This will be explained further later.  
 ```{r}
 init_params = function(n_inputs = "# of features",
                        n_neurons,
-                       momentum = FALSE){
+                       momentum = FALSE,
+                       cache = FALSE){
         
     weights = matrix(data = (0.1 * rnorm(n = n_inputs*n_neurons)),
                              nrow = n_inputs, ncol = n_neurons)
@@ -585,20 +587,38 @@ init_params = function(n_inputs = "# of features",
            #Number of biases = the number
     
     #momentum initialization
-    if (momentum == TRUE){
-          weight_momentums = matrix(data = 0, 
-                                    nrow = nrow(weights),
-                                    ncol = ncol(weights))
-          bias_momentums = matrix(data = 0,
-                                  nrow = nrow(biases),
-                                  ncol = ncol(biases))
-          #save:
+    weight_momentums = matrix(data = 0, 
+                            nrow = nrow(weights),
+                            ncol = ncol(weights))
+    bias_momentums = matrix(data = 0,
+                            nrow = nrow(biases),
+                            ncol = ncol(biases))
+    #cache initialization
+    weight_cache = matrix(data = 0,
+                          nrow = nrow(weights),
+                          ncol = ncol(weights))
+    bias_cache = matrix(data = 0,
+                        nrow = nrow(biases),
+                        ncol = ncol(biases))
+
+    #saving:
+    if (momentum == TRUE & cache == FALSE){ ##momentums only
           list("weights"=weights,"biases"=biases,
                "weight_momentums"=weight_momentums,
                "bias_momentums"=bias_momentums)
-    } else {
-    #save:
-    list("weights"=weights, "biases"=biases) }
+    } else if (cache == TRUE & momentum == FALSE){ ##cache only
+          list("weights"=weights,"biases"=biases,
+               "weight_cache"=weight_cache,
+               "bias_cache"=bias_cache)
+    } else if (momentum == TRUE &  cache == TRUE){ ##momentums and cache
+          list("weights"=weights,"biases"=biases,
+               "weight_momentums"=weight_momentums,
+               "bias_momentums"=bias_momentums,
+               "weight_cache"=weight_cache,
+               "bias_cache"=bias_cache)
+    } else if (momentum == FALSE & cache == FALSE){ ##no momentums or cache
+          list("weights"=weights,"biases"=biases)
+    }
 }
 
 ```
@@ -682,18 +702,38 @@ layer_dense = list(
  #Forward Pass 
  output = inputs%*%weights + biases[col(inputs%*%weights)]
  
- #If momentum == TRUE in parameter initialization, then layer saves:
- if (exists(x = "weight_momentums", where = parameters)){
+ #If momentum == TRUE & cache == FALSE in parameter initialization, 
+ #then layer saves momentum only
+ if (exists(x = "weight_momentums", where = parameters) & 
+     !exists(x = "weight_cache", where = parameters)){
  list("output" = output, ##for forward pass
       "inputs" = inputs, "weights"= weights, "biases" = biases, ##for backprop
       "weight_momentums"=parameters$weight_momentums, ##for momentum
-      "bias_momentums"=parameters$bias_momentums
-      )
- } else { #otherwise, just save
+      "bias_momentums"=parameters$bias_momentums)
+ #if momentum==FALSE & cache==TRUE, saves cache only
+ } else if (!exists(x = "weight_momentums", where = parameters) &
+            exists(x = "weight_cache", where = parameters)){
+ list("output" = output, ##for forward pass
+      "inputs" = inputs, "weights"= weights, "biases" = biases, ##for backprop
+      "weight_cache"=parameters$weight_cache, ##for cache
+      "bias_cache"=parameters$bias_cache)
+ #if momentum==TRUE & cache==TRUE, saves both
+ } else if (exists(x = "weight_momentums", where = parameters) &
+            exists(x = "weight_cache", where = parameters)){
+ list("output" = output, ##for forward pass
+      "inputs" = inputs, "weights"= weights, "biases" = biases, ##for backprop
+      "weight_momentums"=parameters$weight_momentums, ##for momentum
+      "bias_momentums"=parameters$bias_momentums,
+      "weight_cache"=parameters$weight_cache, ##for cache
+      "bias_cache"=parameters$bias_cache)
+ #else both==FALSE, ignore momentum & cache
+ } else {
+   #otherwise, just save
  list("output" = output, ##for forward pass
       "inputs" = inputs, "weights"= weights, "biases" = biases) ##for backprop
-  }
-},#end fwd
+ }
+
+ },#end fwd
 
 ## BACKWARD PASS
  backward = function(inputs, weights, dvalues){
@@ -712,7 +752,7 @@ layer_dense = list(
 ```
 
 Okay, to sum up what just happened here:  
-If we want to use momentum, we set momentum==TRUE in the paramter intialization stage. Then, when the params are passed into the layer objects, their will exists objects that correspond to matrices for the weights and bias momentums. Since these objects exist, the layer function will save them.  
+If we want to use momentum, we set momentum==TRUE in the paramter intialization stage (and when we want to use cache, we will do the same). Then, when the params are passed into the layer objects, their will exists objects that correspond to matrices for the weights and bias momentums. Since these objects exist, the layer function will save them.  
 Then, when the layer is passed into the optimizer in the "layer_forward" option, the optimizer will detect the existence of the momentum objects and use them to calculate updates with momentums. It will also use whatever momentum_rate the user sets.
 Let's try it:
 
@@ -812,14 +852,285 @@ plot(spiral_data$x, spiral_data$y, col = out$predictions)
 ```
 
 # The AdaGrad Optimizer
-AdaGrad, or adaptive gradient, uses a "per-parameter" learning rate rather than a globally shared one, as we used with the SGD optimizer.  
+There are other optimization methods we can use during the learning process. One commonly known method is AdaGrad, or adaptive gradient, which is a variant of SGD that uses a "per-parameter" learning rate rather than a globally shared one.  By saving the history of all parameter updates
+> "AdaGrad provides a way to normalize parameter updates by keeping a history of previous updates — the bigger the sum of the updates is, in either direction (positive or negative), the smaller updates are made further in training. This lets less-frequently updated parameters to keep-up with changes, effectively utilizing more neurons for training" (NNFS, Ch.10 p. 52)  
+
+This is implemented by storing the (squared) parameter gradients in a cache object, and then adding the new (squared) parameter gradients to the cache during each iteration. From the cache, the actual parameter updates are calculated.
+Pseudo-code:  
+```
+cache = cache + param_gradient^2
+param_updates = learning_rate * param_gradient/(sqrt(cache) + epsilon)
+```
+By dividing the parameter gradient by the square root of the cache, we effectively normalize the updates made to the weights and biases. Squaring the parameter gradient in the first step ensures that the cache values are all positive, so that when we divide them from the parameter gradient value the signs do not switch. By taking the square root of the cache (after squaring the parameter gradients), we ensure that the cache values grow slower. Finally, epsilon is a hyperparameter that prevents us from dividing the gradient by zero. It is typically set to be quite small.
+One note: as training evolves, the size of the cache values mechanically grow, making the parameter updates (i.e, learning) smaller and smaller. Therefore, AdaGrad isn't a widely used optimizer.
+Still, we'll implement it to better learn how it works and so that we have the option to use it.
+
+```{r adagrad}
+#NOTE: must initialize params with cache==TRUE
+optimizer_AdaGrad = list(
+  update_params = function(layer_forward, layer_backward, #required
+                           learning_rate = 1,
+                           decay = 0, iteration = 1,
+                           epsilon = 1e-7 
+                           ){
+    #current params
+    current_weights = layer_forward$weights
+    current_biases = layer_forward$biases
+    #gradients
+    weight_gradients = layer_backward$dweights
+    bias_gradients = layer_backward$dbiases
+    
+    #learning rate
+    currnt_learn_rate = learning_rate * (1 / (1 + decay*iteration)) 
+    
+    #cache
+    ##update cache with squared current gradients
+    weight_cache = layer_forward$weight_cache + weight_gradients^2
+    bias_cache = layer_forward$bias_cache + bias_gradients^2
+    
+    #SGD param updates with normalization 
+      #calculate updates
+      weight_update = -currnt_learn_rate*weight_gradients /
+                        (sqrt(weight_cache) + epsilon)
+      bias_update = -currnt_learn_rate*bias_gradients /
+                        (sqrt(bias_cache) + epsilon)
+      #apply updates
+      weights = current_weights + weight_update
+      biases = current_biases + bias_update
+        #save:
+        list("weights" = weights, "biases" = biases, "lr" = currnt_learn_rate,
+             "weight_cache" = weight_cache, "bias_cache" = bias_cache)
+} ##these are the new params to be passed on to the layers when loop restarts
+)
+```
+
+
+# The RMSProp Optimizer
+Another adaptation of SGD is Root Mean Square Propagation, which sort of combines the ideas of momentum and adaptive, per-parameter learning rates. Each update to the saved parameter updates (the cache) retains a fraction of the current cache while being updated with a fraction of the new parameter gradients. Ideally, this prevents learning from stalling as it may with the AdaGrad optimizer, since we are not continually summing squared gradients. 
+Pseudo-code:
+```
+cache = rho*cache + (1 - rho)*(param_gradient^2)
+```
+Rho, another hyperparameter, can be thought of as the cache memory decay rate. If 0, the optimizer will utilize none of the previous updates, and all of the current gradients to calculate parameter updates. If 1, then none of the current updates would be used (and hence learning would not work). Therefore, we will set rho to be somewhere between 0 and 1.  
+According to NNFS, the learning rate should be set fairly low when using this optimizer, since it will already have a lot of "momentum" from the cache-stored updates when rho is high. They suggest a default learning rate of 0.001, which is the default value for RMSProp "in well-known machine learning frameworks" (pg. 58).  
+
+
+```{r rmsprop}
+#NOTE: must initialize params with cache==TRUE
+optimizer_RMSProp = list(
+  update_params = function(layer_forward, layer_backward, #required
+                           learning_rate = 0.001,
+                           decay = 0, iteration = 1,
+                           epsilon = 1e-7,
+                           rho = 0.9
+                           ){
+    #current params
+    current_weights = layer_forward$weights
+    current_biases = layer_forward$biases
+    #gradients
+    weight_gradients = layer_backward$dweights
+    bias_gradients = layer_backward$dbiases
+    
+    #learning rate
+    currnt_learn_rate = learning_rate * (1 / (1 + decay*iteration)) 
+    
+    #cache
+    ##update cache with squared current gradients
+    weight_cache = rho * layer_forward$weight_cache + 
+                  (1-rho) * weight_gradients^2
+    bias_cache = rho * layer_forward$bias_cache + 
+                  (1-rho) * bias_gradients^2
+    
+    #SGD param updates with normalization 
+      #calculate updates
+      weight_update = -currnt_learn_rate*weight_gradients /
+                        (sqrt(weight_cache) + epsilon)
+      bias_update = -currnt_learn_rate*bias_gradients /
+                        (sqrt(bias_cache) + epsilon)
+      #apply updates
+      weights = current_weights + weight_update
+      biases = current_biases + bias_update
+        #save:
+        list("weights" = weights, "biases" = biases, "lr" = currnt_learn_rate,
+             "weight_cache" = weight_cache, "bias_cache" = bias_cache)
+} ##these are the new params to be passed on to layers when the loop restarts
+)
+```
 
 
 
 
+# The Adam Optimizer
+Adam, or Adaptive Momentum, is a widely-used optimizer. When I was first getting into deep learning and trying to figure out what optimizer to use, most resources pointed to Adam, so it's exciting that we get to implement such a commonly used method.    
+Adam builds on RMSProp and directly incorporates momentums into its optimization calculations. Instead of applying the current gradients as the parameter updates, we're going to apply momentums, and then apply a per-parameter adaptive learning rate with the cache, as in RMSProp.  
+Adam also adds a "bias correction mechanism" which intends to compensate for initializing momentum and cache values as zeros. This is implemented by dividing both momentum and cache by $1 - beta^{step}$. Beta should be a number between 0 and 1, so that as step increases (i.e, as training progresses) $beta^{step}$ converges (asymptotes) to zero, and the bias correction term effectively disappears (becomes 1). Essentially, the initial momentums and cache will be divided by a number between 1 and 0 (a fraction), causing them to be larger, which is meant to speed up training in the early training iterations.  
+
+```{r adam}
+#NOTE: must intialize paramters with both cache AND momentum
+optimizer_Adam = list(
+  update_params = function(layer_forward, layer_backward, #required
+                           learning_rate = 0.001,
+                           decay = 0, iteration = 1,
+                           epsilon = 1e-7,
+                           beta_1 = 0.9, beta_2 = 0.999
+                           ){
+    #current params
+    current_weights = layer_forward$weights
+    current_biases = layer_forward$biases
+    #gradients
+    weight_gradients = layer_backward$dweights
+    bias_gradients = layer_backward$dbiases
+    
+    #learning rate
+    currnt_learn_rate = learning_rate * (1 / (1 + decay*iteration)) 
+    
+    #momentums
+    #update momentums with current gradients and bias correct
+    weight_momentums = 
+      (beta_1*layer_forward$weight_momentums + (1-beta_1)*weight_gradients ) /
+                              (1 - (beta_1^iteration )) ##bias correction
+    
+    bias_momentums = 
+      (beta_1*layer_forward$bias_momentums + (1-beta_1)*bias_gradients) /
+                              (1 - (beta_1^iteration))
+                    
+
+    #cache
+    #update cache with squared gradients and bias correct
+    weight_cache = 
+      (beta_2*layer_forward$weight_cache + (1-beta_2)*weight_gradients^2) /
+                              (1 - (beta_2^iteration)) ##bias correction
+
+    bias_cache = 
+      (beta_2*layer_forward$bias_cache + (1-beta_2)*bias_gradients^2) /
+                              (1 - (beta_2^iteration))
+    
+    #calculate param updates (with momentums, and normalize with cache)
+    weight_update = -currnt_learn_rate*weight_momentums /
+                        (sqrt(weight_cache) + epsilon)
+    bias_update = -currnt_learn_rate*bias_momentums /
+                        (sqrt(bias_cache) + epsilon)
+    
+    #apply updates
+    weights = current_weights + weight_update
+    biases = current_biases + bias_update
+      #save:
+      list("weights" = weights, "biases" = biases, "lr" = currnt_learn_rate,
+           "weight_momentums" = weight_momentums, 
+           "bias_momentums" = bias_momentums,
+           "weight_cache" = weight_cache,
+           "bias_cache" = bias_cache)
+
+}##these are the updated params to be passed back into the layers
+)
+```
+
+
+
+
+## Testing the changes
+Optimizers can be easily switched out in the optimization phase of the loop. Remember, for AdaGrad and RMSProp, just set cache==TRUE, since they require a cache of weights and biases. For Adam, set momentum==TRUE and cache==TRUE, since it uses both. (For vanilla SGD, set both to FALSE, the default).  
+
+```{r}
+set.seed(1) ##set seed for results replication
+
+#Inputs
+spiral_data = sim_data_fn(N=100) #100 obs per class, total of 300 samples
+spiral_X = spiral_data[,c("x","y")] #leave out label
+spiral_X = as.matrix(spiral_X)
+
+#Initalize Weights & Biases Outside of Loop
+## Set momentum & cache to TRUE to use Adam optimizer
+l1_params = init_params(n_inputs = 2,     ## ncol(spiral_X) would also work
+                        n_neurons = 64,   ## = to desired # neurons in layer 
+                        momentum = TRUE, cache = TRUE)
+l2_params = init_params(n_inputs = 64,    ## = to n_neurons in prior layer
+                        n_neurons = 3,    ## = to desired # neurons in layer
+                        momentum = TRUE, cache = TRUE)
+
+# EPOCH LOOP
+tot_epochs = 2000L
+
+for (epoch in 1:tot_epochs) {
+#forward
+layer1 = layer_dense$forward(inputs = spiral_X, 
+                             n_neurons = 64,
+                             parameters = l1_params)
+  layer1_relu = activation_ReLU$forward(input_layer = layer1$output)
+      layer2 = layer_dense$forward(inputs = layer1_relu$output, 
+                                   n_neurons = 3,
+                                   parameters = l2_params)
+          output = 
+          activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
+                                                  y_true = spiral_data$label)
+              #metrics:
+              LOSS = output$loss
+              PRED = max.col(output$softmax_output, ties.method = "random") 
+              ACC = mean(PRED==spiral_data$label, na.rm=T)
+
+          #backward
+          loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward(
+                                      dvalues = output$softmax_output, 
+                                      y_true = spiral_data$label)
+      l2_b = layer_dense$backward(inputs = layer2$inputs,
+                            weights = layer2$weights,
+                            dvalues = loss_softm_b$dinputs)
+  l1_relu_b = activation_ReLU$backward(inputs = layer1_relu$inputs,
+                                       dvalues = l2_b$dinputs)     
+l1_b = layer_dense$backward(inputs = layer1$inputs,
+                            weights = layer1$weights,
+                            dvalues = l1_relu_b$dinputs)      
+
+#optimize
+l1_optim_params = optimizer_Adam$update_params(layer_forward = layer1,
+                                       layer_backward = l1_b,
+                                       learning_rate = 0.02,
+                                       decay = 0,iteration = epoch,
+                                       epsilon = 1e-7, 
+                                       beta_1 =  0.5, beta_2 = 0.5)
+l2_optim_params = optimizer_Adam$update_params(layer_forward = layer2,
+                                       layer_backward = l2_b,
+                                       learning_rate = 0.02,
+                                       decay = 0, iteration = epoch,
+                                       epsilon = 1e-7, 
+                                       beta_1 = 0.5, beta_2 = 0.5)
+#update weights & biases
+l1_params = l1_optim_params
+l2_params = l2_optim_params
+
+  #repeat w new weights,biases, & momentums...
+##  
+#Status Report:
+  if (epoch == 1){print(c("epoch","ovrflw err","loss","accuracy", "learn rate"))}
+  if (epoch %in% seq(0,tot_epochs,by=100)){
+        print(c( epoch, 
+                 sum(is.nan(output$softmax_output)),#make sure NaN error is gone
+                 LOSS,
+                 ACC,
+                 l1_optim_params$lr) )} #(include learn rate)
+
+
+#Save Final Metrics:
+  if (epoch==tot_epochs){
+             out = list("loss"=LOSS,
+                         "accuracy"=ACC,
+                         "predictions"=PRED)}
+}#end loop
+
+```
+
+The different optimizers can easily be tested by switching out the optimizer and setting the appropriate arguments in the `#optimize` stage of the loop. I tested each individually but chose just to show Adam. One thing to note is that if the learning rate is set too high, these optimizers are bound to run into exploding gradient issues which, in practical terms, means that values will start to turn to NaN ("not a number") and the neural net will break down. Beyond that, the optimizers works quite well, and Adam is extremely effective.  
+Adam is the only optimizer thus far that managed to classify every single sample correctly in a 300 sample dataset (which is tricky, since the higher number of observations leads to more overlapping of classes).  
 
 
 https://www.r-bloggers.com/2016/01/strategies-to-speedup-r-code/
+
+
+
+That closes this chapter of the work. Here is our complete code thus far:
+```{r}
+
+```
 
 
 
