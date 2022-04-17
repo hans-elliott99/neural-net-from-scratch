@@ -1,0 +1,449 @@
+---
+title: "Building a Neural Network in Base R"
+author: "Hans Elliott"
+output: 
+  html_document:
+    toc: true
+    theme: united
+    code_folding: show
+    #includes:
+      #after_body: footer.html
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      cache = TRUE)
+```
+```{css, echo=FALSE}
+pre {
+  max-height: 300px;
+  overflow-y: auto;
+}
+```
+I am currently working on building a neural network completely from scratch using base R. This post shows a basic multilayer perceptron with full feedforward and backpropagation capabilities. It uses basic Stochastic Gradient Descent to optimize the parameters (weights & biases). In this post, it performs a simple classification task on some simulated data.  
+When the entire project is complete, I hope to have a fully usable system of neural network functions complete with different optimization methods (such as Adam), hyperparameters (like learning rate decay and momentum), and out-of-sample prediction capabilities. I've been writing up the process in a long-form blog/tutorial which I plan to post on my website for anyone who is interested.  
+Learning how each component of a neural network works and then building them with code has been an enlightening experience, and really deepened my understanding of neural networks and their capabilities. It has also been a unique challenge to build the network using base R, which I believe is worthwhile since it prevents me from using pre-existing packages as quick fixes to complicated problems (and also avoids any dependency issues).   
+This project is inspired by the ["Neural Networks from Scratch in Python"](https://nnfs.io/) book, which does an excellent job explaining the intuition, math, and implementation of each step in a neural network. I cannot recommend it enough.  
+
+# The Task
+This function simulates data in a spiral form with 3 labels, as seen below. This provides us with a basic _multi-class classification_ task, where we want the neural network to learn the decision boundaries that effectively separate each class.
+```{r sim-data}
+## A function to simulate spiral data
+sim_data_fn = function(
+  N = 100, # number of points per class
+  D = 2, # dimensionality (number of features)
+  K = 3, # number of classes
+  random_order = FALSE
+){
+set.seed(123)
+   X = data.frame() # data matrix (each row = single sample)
+   y = data.frame() # class labels
+
+for (j in (1:K)){
+  r = seq(0.05,1,length.out = N) # radius
+  t = seq((j-1)*4.7,j*4.7, length.out = N) + rnorm(N, sd = 0.3) # theta
+  Xtemp = data.frame(x =r*sin(t) , y = r*cos(t)) 
+  ytemp = data.frame(matrix(j, N, 1))
+  X = rbind(X, Xtemp)
+  y = rbind(y, ytemp)
+  }
+spiral_data = cbind(X,y)
+colnames(spiral_data) = c(colnames(X), 'label')
+
+# Want randomly ordered labels?
+if (random_order==TRUE) {spiral_data$label = sample(1:3, size = N*K, 
+                                                    replace = TRUE)}
+return(spiral_data)
+}
+```
+
+```{r}
+spiral_data = sim_data_fn(N=100) #100 obs per class, total of 300 samples
+plot(spiral_data$x, spiral_data$y, col = spiral_data$label)
+```
+
+
+
+# The Neural Network Functions
+All of the functions used here were built from scratch using R's `base` package. This is everything we need to perform a basic forward-pass, backward-pass, and parameter optimization.  
+Included are functions to:  
+- Initialize random parameters (weights & biases) for each layer (hidden and output layers)  
+- Create a densely connected layer with specified number of neurons.  
+- Apply ReLU or Softmax Activation Functions to each neuron.  
+- Calculate loss using categorical cross-entropy.  
+- Backpropogate each step in order to determine gradients that determine how to change every weight and bias.  
+- Apply the gradients to the current weights and biases using an optimizer (Stochastic Gradient Descent).    
+
+```{r nn-fns}
+# Initialize Parameters for a Layer----
+init_params = function(n_inputs = "# of features", n_neurons){
+        
+    weights = matrix(data = (0.1 * rnorm(n = n_inputs*n_neurons)),
+                             nrow = n_inputs, ncol = n_neurons)
+           #Number of weights = the number of inputs*number of neurons,
+           #since every connection between the previous neurons (from input) and
+           #the current neurons have an associated weight
+    biases = matrix(data = 0, nrow = 1, ncol = n_neurons)
+           #Number of biases = the number of neurons in a layer
+    #saves:
+    list("weights"=weights, "biases"=biases)
+}
+
+
+# Create a Dense Layer ----
+layer_dense = list(
+## FORWARD PASS 
+ forward = function(    
+            inputs, 
+            n_neurons, 
+            parameters) {#begin fn
+   
+  n_inputs = ncol(inputs)
+      #determine number of inputs per sample from dims of the input matrix
+      #should be equal to # of features (i.e, columns) in a sample (i.e, a row)
+  
+       #bias will have shape 1 by number of neurons. we initialize with zeros
+ weights = parameters$weights
+ biases = parameters$biases
+ #Forward Pass 
+ output = inputs%*%weights + biases[col(inputs%*%weights)]
+ 
+ #SAVE:
+ list("output" = output, #for forward pass
+      "inputs" = inputs, "weights"= weights, "biases" = biases) #for backprop
+
+ },
+## BACKWARD PASS
+ backward = function(inputs, weights, dvalues){
+    #Gradients on parameters
+    dweights = t(inputs)%*%dvalues
+    dbiases = colSums(dvalues)
+    #Gradient on values
+    dinputs = dvalues%*%t(weights) 
+    #save:
+    list("dinputs"=dinputs,
+         "dweights"=dweights,
+         "dbiases"=dbiases)
+ }
+ 
+)
+### Activation Functions ----
+## ReLU
+activation_ReLU = list(
+  #FORWARD PASS
+  forward = function(input_layer){
+    
+    output = matrix(sapply(X = input_layer, 
+                    function(X){max(c(0, X))}
+                    ), 
+                  nrow = nrow(input_layer), ncol = ncol(input_layer))
+    #ReLU function coerced into a matrix so the shape
+    #is maintained (it will be equivalent to that of the input shape)
+    
+    #Function saves:
+    list("output" = output, "inputs" = input_layer)
+    #And prints
+    #invisible(output)
+  },
+  #BACKWARD PASS
+  backward = function(inputs, dvalues){
+    dinputs = dvalues
+    dinputs[inputs <= 0] = 0
+    #save:
+    list("dinputs"=dinputs)
+  }
+)
+
+## SoftMax
+activation_Softmax = list(
+  #FORWARD PASS
+  forward = function(inputs){
+          #scale inputs
+          max_value = apply(X = inputs, MARGIN = 2,  FUN = max)
+          scaled_inputs = sapply(X = 1:ncol(inputs), 
+                 FUN = function(X){
+                    inputs[,X] - abs(max_value[X])})
+
+          # exponetiate
+          exp_values = exp(scaled_inputs)
+          # normalize
+          norm_base = matrix(rowSums(exp_values),
+                             nrow = nrow(inputs), ncol = 1)
+          probabilities = sapply(X = 1:nrow(inputs),
+                          FUN = function(X){exp_values[X,]/norm_base[X,]}) 
+          return(t(probabilities))
+          #(transpose probabilities)
+          },
+  #BACKWARD PASS
+  backward = function(softmax_output, dvalues){
+    #*INCOMPLETE SECTION - don't use*
+    #flatten output array
+    flat_output = as.vector(softmax_output)
+    
+    #calculate jacobian matrix of output
+    jacobian_matrix = diag(flat_output) - flat_output%*%t(flat_output)
+    
+    #calculate sample-wise gradient
+    dinputs = jacobian_matrix%*%flat_dvalues
+    
+    
+  }
+)
+
+### Loss ----
+Categorical_CrossEntropy = list(
+  #FORWARD PASS
+  forward = function(y_pred = "softmax output", y_true = "targets"){
+    
+    #DETECT NUMBER OF SAMPLES
+    samples = length(y_true)  
+
+    #CLIP SAMPLES TO AVOID -Inf ERROR
+    y_pred_clipped = ifelse(y_pred <= 1e-7, 1e-7, 
+                        ifelse(y_pred >= (1-1e-7), (1-1e-7), y_pred))
+    
+
+    #DETERMINE IF Y_TRUE IS ONE-HOT-ENCODED AND SELECT CORRESPODNING CONFIDENCES
+    confidences = ifelse(nrow(t(y_true)) == 1, 
+      #if y_true is a single vector of labels (i.e, sparse), then confidences =
+                    y_pred_clipped[cbind(1:samples, y_true)],
+                      
+                      ifelse(nrow(y_true) > 1,
+                      #else, if y_true is one-hot encoded, then confidences =
+                             rowSums(y_pred_clipped*y_true),
+                             #else
+                             "error indexing the predicted class confidences")
+                  )
+                    
+    #CALC LOSS FOR EACH SAMPLE (ROW)
+    neg_log_likelihoods = -log(confidences)
+    return(neg_log_likelihoods)
+    
+  },
+  #BACKWARD PASS
+  backward = function(y_true, dvalues){
+    #number of samples
+    samples = length(dvalues)
+    
+    #number of labels
+    labels = length(unique(dvalues[1,]))
+    
+    #if labels are sparse, turn them into one-hot encoded vector
+    y_true = ifelse(#if
+                    nrow(t(y_true)) ==1,
+                    #one-hot-encode
+                    y_true = do.call(rbind,
+                                     lapply(X = y_true,
+                                       function(X) as.integer(
+                                          !is.na(match(unique(
+                                          unlist(y_true)
+                                                        ), X)
+                                                ))
+                                      )), 
+                    #else
+                    y_true)
+    
+    #calculate gradient
+    dinputs = -y_true/dvalues
+    #normalize gradient
+    dinputs = dinputs/samples
+    return(dinputs)
+  }
+)
+
+#Softmax Activation X Cross-Entropy Loss Combination ----
+# combine for faster backprop step (derivatives simplify nicely)
+activation_loss_SoftmaxCrossEntropy = list(
+  #FORWARD PASS
+  forward = function(inputs, y_true){
+    #output layer's activation function
+    softmax_out = activation_Softmax$forward(inputs)
+    #calculate loss
+    loss = Categorical_CrossEntropy$forward(softmax_out, y_true)
+    #function saves:
+    list("softmax_output"=softmax_out, "loss"=loss) 
+  },
+  #BACKWARD PASS
+  backward = function(dvalues, y_true){
+    
+    #Detect number of samples
+    if (is.vector(dvalues)) {      #if one sample
+      samples = 1
+    } else if (is.array(dvalues)) {  #else if multiple samples
+      samples = nrow(dvalues)
+    } else print("error checking shape of inputs")
+    
+    #Reverse One-Hot Encoding
+    #if labels are one-hot encoded, turn them discrete values
+     ##helper function 
+    anti_ohe = function(y_true){
+               unique_classes = ncol(y_true)
+               samples = nrow(y_true)
+               y_true_vec = as.vector(y_true)
+                    
+               class_key = rep(1:unique_classes, each = samples)
+               y_true = class_key[y_true_vec==1]
+                    #selects the classes that correspond to 1s in y_true vector
+                    return(y_true)
+                    }
+     ##check & modify
+    y_true = if(is.array(y_true)){ #if one-hot encoded
+                    #change to sparse
+                    anti_ohe(y_true)
+              } else y_true
+    
+    #Calculate gradient
+     #Copy so we can modify
+     dinputs = dvalues
+     #Calculate gradient
+     #index the prediction array with the sample number and its
+     #true value index, subtracting 1 from these values. Requires discrete,
+     #not one-hot encoded, true labels (explaining the need for the above step)
+     dinputs[cbind(1:samples, y_true)] = dinputs[cbind(1:samples, y_true)] - 1
+     #Normalize gradient
+     dinputs = dinputs/samples
+    #save desired outputs
+    list("dinputs" = dinputs, "samples" = samples, "y_true" = y_true)
+  }
+)
+
+# Optimizers----
+## Basic Stochastic Gradient Descent (SGD)
+optimizer_SGD = list(
+  update_params = function(layer_forward, layer_backward, 
+                           learning_rate = 1){ #default value
+    #current params
+    current_weights = layer_forward$weights
+    current_biases = layer_forward$biases
+    #gradients
+    weight_gradients = layer_backward$dweights
+    bias_gradients = layer_backward$dbiases
+    #update
+    weights = current_weights - learning_rate*weight_gradients
+    biases = current_biases - learning_rate*bias_gradients
+      #save:
+      list("weights" = weights, "biases" = biases)
+  }
+)
+
+```
+
+
+
+
+# Building a Network
+Here I build a network to predict the classes (1, 2, or 3) of the spiral data based on the x and y coordinates, which represent the "features" in this dataset. Parameters are initialized randomly and then I use a for-loop to iterate through the forward and backward pass over 2500 epochs.  
+At the bottom of the loop, the optimizer applies the calculated gradients to the current weights and biases, and the layer parameters are written over with the newly calculated parameters.  
+
+```{r nn-loop}
+set.seed(1) ##set seed for results replication
+#Data: use x and y coordinates as features
+spiral_X = spiral_data[,c("x","y")]
+spiral_X = as.matrix(spiral_X) ##convert to matrix
+
+#Initalize Weights & Biases Outside of Loop
+l1_params = init_params(n_inputs = 2,      ## ncol(spiral_X) would also work
+                         n_neurons = 64)   ## = to desired # neurons in layer 
+l2_params = init_params(n_inputs = 64,     ## = to n_neurons in prior layer
+                         n_neurons = 3)    ## = to desired # neurons in layer
+
+# EPOCH LOOP
+tot_epochs = 2500L
+
+for (epoch in 1:tot_epochs) {
+#Forward-pass
+layer1 = layer_dense$forward(inputs = spiral_X, ##feed in data
+                             n_neurons = 64,    ##specify desired neurons
+                             parameters = l1_params) ##provide layer parameters
+  layer1_relu = activation_ReLU$forward(input_layer = layer1$output)# #apply ReLU
+      layer2 = layer_dense$forward(inputs = layer1_relu$output,##feed in ReLU output
+                                   n_neurons = 3, ##3 neurons - 1 for each class
+                                   parameters = l2_params) ##provide params
+          output = 
+          activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
+                                                  y_true = spiral_data$label)
+          ##uses a combined softmax/crossentropy fn to apply a softmax activation function and calculate loss.
+              #metrics:
+              LOSS = output$loss ##extract calculate loss
+              PRED = max.col(output$softmax_output, ties.method = "random")
+                ##extract predictions based on category with highest predicted probability
+              ACC = mean(PRED==spiral_data$label) ##calculate accuracy based on portion of correctly labeled samples
+
+          #Backward-pass
+          loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward( ##backprop softmax fn
+                                      dvalues = output$softmax_output, 
+                                      y_true = spiral_data$label)
+      l2_b = layer_dense$backward(inputs = layer2$inputs, ##backprop layer2, pass in softmax derivatives (chain rule)
+                            weights = layer2$weights,
+                            dvalues = loss_softm_b$dinputs)
+  l1_relu_b = activation_ReLU$backward(inputs = layer1_relu$inputs, ##backprop layer1's ReLU, pass in layer2 derivatives
+                                       dvalues = l2_b$dinputs)     
+l1_b = layer_dense$backward(inputs = layer1$inputs, ##backprop layer1, pass in layer1 ReLU derivatives
+                            weights = layer1$weights,
+                            dvalues = l1_relu_b$dinputs)      
+
+#Optimize parameters with learning rate of 0.5
+l1_optim_params = optimizer_SGD$update_params(layer_forward = layer1,
+                                       layer_backward = l1_b,
+                                       learning_rate = 0.5)
+                                       
+l2_optim_params = optimizer_SGD$update_params(layer_forward = layer2,
+                                       layer_backward = l2_b,
+                                       learning_rate = 0.5)
+#Update weights & biases with newly calculated params
+l1_params = l1_optim_params
+l2_params = l2_optim_params
+
+  #loop repeats with new weights & biases...
+#---
+#Status Report:
+  if (epoch == 1){print(c("epoch","loss","accuracy"))}
+  if (epoch %in% seq(0,tot_epochs,by=100)){
+        print(c( epoch, 
+                 LOSS,
+                 ACC) )}
+
+
+#Save Final Metrics:
+  if (epoch==tot_epochs){
+             out = list("loss"=LOSS,
+                         "accuracy"=ACC,
+                         "predictions"=PRED)}
+}#end loop
+
+```
+
+The neural net is able to learn the classes quite effectively. As it minimizes loss, the accuracy of its predictions steadily increases. Of course, it is not necessarily a hard task for a model to memorize data. To truly test this network we would need to provide it with some test data, something I plan to do when my full neural net package is complete. For now, I am happy with what this math & code is capable of. 
+
+
+**Final Metrics**
+```{r}
+#Loss:
+out$loss
+#Accuracy:
+out$accuracy
+```
+
+```{css, echo=FALSE}
+.scroll-100 {
+  max-height: 100px;
+  overflow-y: auto;
+  background-color: inherit;
+}
+```
+
+```{r, max.height='100px'}
+
+#Predictions
+cbind(predicted_label = out$predictions, actual_label = spiral_data$label)
+
+```
+
+
+
+
+
+
+
+
+
