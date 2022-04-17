@@ -456,6 +456,7 @@ pre code {
 
 <h1 class="title toc-ignore">Building a Neural Network in Base R</h1>
 <h4 class="author">Hans Elliott</h4>
+<h4 class="date">04-17-2022</h4>
 
 </div>
 
@@ -474,33 +475,38 @@ pre {
   overflow-y: auto;
 }
 </style>
-<p>I am currently working on building a neural network completely from
-scratch using base R. This post shows a basic multilayer perceptron with
-full feedforward and backpropagation capabilities. It uses basic
-Stochastic Gradient Descent to optimize the parameters (weights &amp;
-biases). In this post, it performs a simple classification task on some
-simulated data.<br />
+<p><a href="https://github.com/hans-elliott99/neural-net-from-scratch">I
+am currently working on building a neural network completely from
+scratch using base R.</a> This post shows some my progress thus far: a
+basic multilayered perceptron with full feed-forward and backpropagation
+capabilities. It uses basic Stochastic Gradient Descent to optimize the
+parameters (weights &amp; biases). In this post, it performs a simple
+classification task on some simulated data.<br />
 When the entire project is complete, I hope to have a fully usable
 system of neural network functions complete with different optimization
 methods (such as Adam), hyperparameters (like learning rate decay and
 momentum), and out-of-sample prediction capabilities. I’ve been writing
-up the process in a long-form blog/tutorial which I plan to post on my
-website for anyone who is interested.<br />
+up the process in a long-form blog/tutorial which I plan to post for
+anyone who is interested.<br />
 Learning how each component of a neural network works and then building
 them with code has been an enlightening experience, and really deepened
 my understanding of neural networks and their capabilities. It has also
 been a unique challenge to build the network using base R, which I
 believe is worthwhile since it prevents me from using pre-existing
 packages as quick fixes to complicated problems (and also avoids any
-dependency issues).<br />
+dependency issues). At the end of the day, the calculations performed by
+the computer are fairly basic dot products and matrix multiplications,
+so advanced packages aren’t really necessary.<br />
 This project is inspired by the <a href="https://nnfs.io/">“Neural
 Networks from Scratch in Python”</a> book, which does an excellent job
 explaining the intuition, math, and implementation of each step in a
 neural network. I cannot recommend it enough.</p>
 <div id="the-task" class="section level1">
 <h1>The Task</h1>
-<p>This function simulates data in a spiral form, as seen below. This
-provides us with a basic multi-class classification task.</p>
+<p>This function simulates data in a spiral form with 3 labels, as seen
+below. This provides us with a basic <em>multi-class classification</em>
+task, where we want the neural network to learn the decision boundaries
+that effectively separate each class.</p>
 <pre class="r"><code>## A function to simulate spiral data
 sim_data_fn = function(
   N = 100, # number of points per class
@@ -835,11 +841,11 @@ layer1 = layer_dense$forward(inputs = spiral_X, ##feed in data
           output = 
           activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
                                                   y_true = spiral_data$label)
-          ##uses a combined softmax/crossentropy fn to apply a softmax
-          ##activation function and calculate loss.
+          ##uses a combined softmax/crossentropy fn to apply a softmax activation function and calculate loss.
               #metrics:
               LOSS = output$loss ##extract calculate loss
-              PRED = max.col(output$softmax_output, ties.method = &quot;random&quot;) ##extract predictions based on category with highest predicted probability
+              PRED = max.col(output$softmax_output, ties.method = &quot;random&quot;)
+                ##extract predictions based on category with highest predicted probability
               ACC = mean(PRED==spiral_data$label) ##calculate accuracy based on portion of correctly labeled samples
 
           #Backward-pass
@@ -870,7 +876,7 @@ l2_params = l2_optim_params
   #loop repeats with new weights &amp; biases...
 #---
 #Status Report:
-  if (epoch == 1){print(c(&quot;epoch&quot;,&quot;ovrflw err&quot;,&quot;loss&quot;,&quot;accuracy&quot;))}
+  if (epoch == 1){print(c(&quot;epoch&quot;,&quot;loss&quot;,&quot;accuracy&quot;))}
   if (epoch %in% seq(0,tot_epochs,by=100)){
         print(c( epoch, 
                  LOSS,
@@ -883,7 +889,7 @@ l2_params = l2_optim_params
                          &quot;accuracy&quot;=ACC,
                          &quot;predictions&quot;=PRED)}
 }#end loop</code></pre>
-<pre><code>## [1] &quot;epoch&quot;      &quot;ovrflw err&quot; &quot;loss&quot;       &quot;accuracy&quot;  
+<pre><code>## [1] &quot;epoch&quot;    &quot;loss&quot;     &quot;accuracy&quot;
 ## [1] 100.0000000   1.1481168   0.4666667
 ## [1] 200.0000000   1.0666849   0.5633333
 ## [1] 300.0000000   0.8856428   0.6766667
@@ -914,9 +920,8 @@ minimizes loss, the accuracy of its predictions steadily increases. Of
 course, it is not necessarily a hard task for a model to memorize data.
 To truly test this network we would need to provide it with some test
 data, something I plan to do when my full neural net package is
-complete. For now, I am happy with what this math &amp; code is capable
-of.<br />
-<strong>Final Metrics</strong></p>
+complete. For now, I am happy with what this program is capable of.</p>
+<p><strong>Final Metrics</strong></p>
 <pre class="r"><code>#Loss:
 out$loss</code></pre>
 <pre><code>## [1] 0.4751791</code></pre>

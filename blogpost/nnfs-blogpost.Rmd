@@ -1,6 +1,7 @@
 ---
 title: "Building a Neural Network in Base R"
 author: "Hans Elliott"
+date: "04-17-2022"
 output: 
   html_document:
     toc: true
@@ -20,9 +21,9 @@ pre {
   overflow-y: auto;
 }
 ```
-I am currently working on building a neural network completely from scratch using base R. This post shows a basic multilayer perceptron with full feedforward and backpropagation capabilities. It uses basic Stochastic Gradient Descent to optimize the parameters (weights & biases). In this post, it performs a simple classification task on some simulated data.  
-When the entire project is complete, I hope to have a fully usable system of neural network functions complete with different optimization methods (such as Adam), hyperparameters (like learning rate decay and momentum), and out-of-sample prediction capabilities. I've been writing up the process in a long-form blog/tutorial which I plan to post on my website for anyone who is interested.  
-Learning how each component of a neural network works and then building them with code has been an enlightening experience, and really deepened my understanding of neural networks and their capabilities. It has also been a unique challenge to build the network using base R, which I believe is worthwhile since it prevents me from using pre-existing packages as quick fixes to complicated problems (and also avoids any dependency issues).   
+[I am currently working on building a neural network completely from scratch using base R.](https://github.com/hans-elliott99/neural-net-from-scratch) This post shows some my progress thus far: a basic multilayered perceptron with full feed-forward and backpropagation capabilities. It uses basic Stochastic Gradient Descent to optimize the parameters (weights & biases). In this post, it performs a simple classification task on some simulated data.  
+When the entire project is complete, I hope to have a fully usable system of neural network functions complete with different optimization methods (such as Adam), hyperparameters (like learning rate decay and momentum), and out-of-sample prediction capabilities. I've been writing up the process in a long-form blog/tutorial which I plan to post for anyone who is interested.  
+Learning how each component of a neural network works and then building them with code has been an enlightening experience, and really deepened my understanding of neural networks and their capabilities. It has also been a unique challenge to build the network using base R, which I believe is worthwhile since it prevents me from using pre-existing packages as quick fixes to complicated problems (and also avoids any dependency issues). At the end of the day, the calculations performed by the computer are fairly basic dot products and matrix multiplications, so advanced packages aren't really necessary.     
 This project is inspired by the ["Neural Networks from Scratch in Python"](https://nnfs.io/) book, which does an excellent job explaining the intuition, math, and implementation of each step in a neural network. I cannot recommend it enough.  
 
 # The Task
@@ -413,7 +414,7 @@ l2_params = l2_optim_params
 
 ```
 
-The neural net is able to learn the classes quite effectively. As it minimizes loss, the accuracy of its predictions steadily increases. Of course, it is not necessarily a hard task for a model to memorize data. To truly test this network we would need to provide it with some test data, something I plan to do when my full neural net package is complete. For now, I am happy with what this math & code is capable of. 
+The neural net is able to learn the classes quite effectively. As it minimizes loss, the accuracy of its predictions steadily increases. Of course, it is not necessarily a hard task for a model to memorize data. To truly test this network we would need to provide it with some test data, something I plan to do when my full neural net package is complete. For now, I am happy with what this program is capable of. 
 
 
 **Final Metrics**
