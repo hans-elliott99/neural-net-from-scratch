@@ -1,0 +1,961 @@
+---
+title: "part3"
+author: "Hans Elliott"
+date: "4/18/2022"
+output: github_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Full code
+In the last section, we finished and tested our Stochastic Gradient Descent optimizer, allowing us to complete out first full training loops on the simulated data. We then added hyperparameters -- learning rate decay and momentum -- before implementing 3 alternative optimizers: AdaGrad (adaptive gradient), RMSProp (Root Mean Square Propagation), and Adam (Adaptive Momentum).  
+Here is our entire package of neural network functions thus far. (About 500 lines of code, not bad!) 
+
+```{r nn-functions}
+### Initialize Layer Parameters----
+init_params = function(n_inputs = "# of features",
+                       n_neurons,
+                       momentum = FALSE,
+                       cache = FALSE){
+        
+    weights = matrix(data = (0.1 * rnorm(n = n_inputs*n_neurons)),
+                             nrow = n_inputs, ncol = n_neurons)
+           #Number of weights = the number of inputs*number of neurons,
+           #since every connection between the previous neurons (from input) and
+           #the current neurons have an associated weight
+    biases = matrix(data = 0, nrow = 1, ncol = n_neurons)
+           #Number of biases = the number
+    
+    #momentum initialization
+    weight_momentums = matrix(data = 0, 
+                            nrow = nrow(weights),
+                            ncol = ncol(weights))
+    bias_momentums = matrix(data = 0,
+                            nrow = nrow(biases),
+                            ncol = ncol(biases))
+    #cache initialization
+    weight_cache = matrix(data = 0,
+                          nrow = nrow(weights),
+                          ncol = ncol(weights))
+    bias_cache = matrix(data = 0,
+                        nrow = nrow(biases),
+                        ncol = ncol(biases))
+
+    #saving:
+    if (momentum == TRUE & cache == FALSE){ ##momentums only
+          list("weights"=weights,"biases"=biases,
+               "weight_momentums"=weight_momentums,
+               "bias_momentums"=bias_momentums)
+    } else if (cache == TRUE & momentum == FALSE){ ##cache only
+          list("weights"=weights,"biases"=biases,
+               "weight_cache"=weight_cache,
+               "bias_cache"=bias_cache)
+    } else if (momentum == TRUE &  cache == TRUE){ ##momentums and cache
+          list("weights"=weights,"biases"=biases,
+               "weight_momentums"=weight_momentums,
+               "bias_momentums"=bias_momentums,
+               "weight_cache"=weight_cache,
+               "bias_cache"=bias_cache)
+    } else if (momentum == FALSE & cache == FALSE){ ##no momentums or cache
+          list("weights"=weights,"biases"=biases)
+    }
+}
+
+### Dense Layers ----
+layer_dense = list(
+## FORWARD PASS FUNCTION 
+ forward = function(    #default vals for weights/biases are random
+            inputs, 
+            n_neurons, 
+            parameters
+ ) {#begin fn
+   
+ n_inputs = ncol(inputs)
+ weights = parameters$weights
+ biases = parameters$biases
+ #Forward Pass 
+ output = inputs%*%weights + biases[col(inputs%*%weights)]
+ 
+ #If momentum == TRUE & cache == FALSE in parameter initialization, 
+ #then layer saves momentum only
+ if (exists(x = "weight_momentums", where = parameters) & 
+     !exists(x = "weight_cache", where = parameters)){
+ list("output" = output, ##for forward pass
+      "inputs" = inputs, "weights"= weights, "biases" = biases, ##for backprop
+      "weight_momentums"=parameters$weight_momentums, ##for momentum
+      "bias_momentums"=parameters$bias_momentums)
+ #if momentum==FALSE & cache==TRUE, saves cache only
+ } else if (!exists(x = "weight_momentums", where = parameters) &
+            exists(x = "weight_cache", where = parameters)){
+ list("output" = output, ##for forward pass
+      "inputs" = inputs, "weights"= weights, "biases" = biases, ##for backprop
+      "weight_cache"=parameters$weight_cache, ##for cache
+      "bias_cache"=parameters$bias_cache)
+ #if momentum==TRUE & cache==TRUE, saves both
+ } else if (exists(x = "weight_momentums", where = parameters) &
+            exists(x = "weight_cache", where = parameters)){
+ list("output" = output, ##for forward pass
+      "inputs" = inputs, "weights"= weights, "biases" = biases, ##for backprop
+      "weight_momentums"=parameters$weight_momentums, ##for momentum
+      "bias_momentums"=parameters$bias_momentums,
+      "weight_cache"=parameters$weight_cache, ##for cache
+      "bias_cache"=parameters$bias_cache)
+ #else both==FALSE, ignore momentum & cache
+ } else {
+   #otherwise, just save
+ list("output" = output, ##for forward pass
+      "inputs" = inputs, "weights"= weights, "biases" = biases) ##for backprop
+ }
+
+ },#end fwd
+
+## BACKWARD PASS
+ backward = function(inputs, weights, dvalues){
+    #Gradients on parameters
+    dweights = t(inputs)%*%dvalues
+    dbiases = colSums(dvalues)
+    #Gradient on values
+    dinputs = dvalues%*%t(weights) 
+    #save:
+    list("dinputs"=dinputs,
+         "dweights"=dweights,
+         "dbiases"=dbiases)
+ }
+ 
+)#end list
+
+### Activation Functions ----
+## ReLU
+activation_ReLU = list(
+  #FORWARD PASS
+  forward = function(input_layer){
+    
+    output = matrix(sapply(X = input_layer, 
+                    function(X){max(c(0, X))}
+                    ), 
+                  nrow = nrow(input_layer), ncol = ncol(input_layer))
+    #ReLU function coerced into a matrix so the shape
+    #is maintained (it will be equivalent to that of the input shape)
+    
+    #Function saves:
+    list("output" = output, "inputs" = input_layer)
+    #And prints
+    #invisible(output)
+  },
+  #BACKWARD PASS
+  backward = function(inputs, dvalues){
+    dinputs = dvalues
+    dinputs[inputs <= 0] = 0
+    #save:
+    list("dinputs"=dinputs)
+  }
+)
+
+## SoftMax
+activation_Softmax = list(
+  forward = function(inputs){
+          #scale inputs
+          max_value = apply(X = inputs, MARGIN = 2,  FUN = max)
+          scaled_inputs = sapply(X = 1:ncol(inputs), 
+                 FUN = function(X){
+                    inputs[,X] - abs(max_value[X])})
+
+          # exponetiate
+          exp_values = exp(scaled_inputs)
+          # normalize
+          norm_base = matrix(rowSums(exp_values),
+                             nrow = nrow(inputs), ncol = 1)
+          probabilities = sapply(X = 1:nrow(inputs),
+                          FUN = function(X){exp_values[X,]/norm_base[X,]}) 
+          return(t(probabilities))
+          #(transpose probabilities)
+          },
+  
+  backward = function(softmax_output, dvalues){
+    #*INCOMPLETE SECTION - don't use*
+    #flatten output array
+    flat_output = as.vector(softmax_output)
+    
+    #calculate jacobian matrix of output
+    jacobian_matrix = diag(flat_output) - flat_output%*%t(flat_output)
+    
+    #calculate sample-wise gradient
+    dinputs = jacobian_matrix%*%flat_dvalues
+    
+    
+  }
+)
+
+### Loss ----
+Categorical_CrossEntropy = list(
+  #FORWARD PASS
+  forward = function(y_pred = "softmax output", y_true = "targets"){
+    
+    #DETECT NUMBER OF SAMPLES
+    samples = length(y_true)  
+
+    #CLIP SAMPLES TO AVOID -Inf ERROR
+    y_pred_clipped = ifelse(y_pred <= 1e-7, 1e-7, 
+                        ifelse(y_pred >= (1-1e-7), (1-1e-7), y_pred))
+    
+
+    #DETERMINE IF Y_TRUE IS ONE-HOT-ENCODED AND SELECT CORRESPODNING CONFIDENCES
+    confidences = ifelse(nrow(t(y_true)) == 1, 
+      #if y_true is a single vector of labels (i.e, sparse), then confidences =
+                    y_pred_clipped[cbind(1:samples, y_true)],
+                      
+                      ifelse(nrow(y_true) > 1,
+                      #else, if y_true is one-hot encoded, then confidences =
+                             rowSums(y_pred_clipped*y_true),
+                             #else
+                             "error indexing the predicted class confidences")
+                  )
+                    
+    #CALC LOSS FOR EACH SAMPLE (ROW)
+    neg_log_likelihoods = -log(confidences)
+    return(neg_log_likelihoods)
+    
+  },
+  #BACKWARD PASS
+  backward = function(y_true, dvalues){
+    #number of samples
+    samples = length(dvalues)
+    
+    #number of labels
+    labels = length(unique(dvalues[1,]))
+    
+    #if labels are sparse, turn them into one-hot encoded vector
+    y_true = ifelse(#if
+                    nrow(t(y_true)) ==1,
+                    #one-hot-encode
+                    y_true = do.call(rbind,
+                                     lapply(X = y_true,
+                                       function(X) as.integer(
+                                          !is.na(match(unique(
+                                          unlist(y_true)
+                                                        ), X)
+                                                ))
+                                      )), 
+                    #else
+                    y_true)
+    
+    #calculate gradient
+    dinputs = -y_true/dvalues
+    #normalize gradient
+    dinputs = dinputs/samples
+    return(dinputs)
+  }
+)
+#---
+#Softmax X Cross Entropy- combined softmax activation
+# & cross-entropy loss for faster backprop
+activation_loss_SoftmaxCrossEntropy = list(
+  #FORWARD PASS
+  forward = function(inputs, y_true){
+    #output layer's activation function
+    softmax_out = activation_Softmax$forward(inputs)
+    #calculate loss
+    loss = Categorical_CrossEntropy$forward(softmax_out, y_true)
+    #function saves:
+    list("softmax_output"=softmax_out, "loss"=loss) 
+  },
+  #BACKWARD PASS
+  backward = function(dvalues, y_true){
+    
+    #Detect number of samples
+    if (is.vector(dvalues)) {      #if one sample
+      samples = 1
+    } else if (is.array(dvalues)) {  #else if multiple samples
+      samples = nrow(dvalues)
+    } else print("error checking shape of inputs")
+    
+    #Reverse One-Hot Encoding
+    #if labels are one-hot encoded, turn them discrete values
+     ##helper function 
+    anti_ohe = function(y_true){
+               unique_classes = ncol(y_true)
+               samples = nrow(y_true)
+               y_true_vec = as.vector(y_true)
+                    
+               class_key = rep(1:unique_classes, each = samples)
+               y_true = class_key[y_true_vec==1]
+                    #selects the classes that correspond to 1s in y_true vector
+                    return(y_true)
+                    }
+     ##check & modify
+    y_true = if(is.array(y_true)){ #if one-hot encoded
+                    #change to sparse
+                    anti_ohe(y_true)
+              } else y_true
+    
+    #Calculate gradient
+     #Copy so we can modify
+     dinputs = dvalues
+     #Calculate gradient
+     #index the prediction array with the sample number and its
+     #true value index, subtracting 1 from these values. Requires discrete,
+     #not one-hot encoded, true labels (explaining the need for the above step)
+     dinputs[cbind(1:samples, y_true)] = dinputs[cbind(1:samples, y_true)] - 1
+     #Normalize gradient
+     dinputs = dinputs/samples
+    #save desired outputs
+    list("dinputs" = dinputs, "samples" = samples, "y_true" = y_true)
+  }
+)
+### Optimizers----
+## Stochastic Gradient Descent (vanilla + decay & momentum options) ##
+optimizer_SGD = list(
+  update_params = function(layer_forward, layer_backward, #required
+                           learning_rate = 1,
+                           decay = 0, iteration = 1,
+                           momentum_rate = 0 
+                           ){
+    #current params
+    current_weights = layer_forward$weights
+    current_biases = layer_forward$biases
+    #gradients
+    weight_gradients = layer_backward$dweights
+    bias_gradients = layer_backward$dbiases
+    
+    #learning rate
+    currnt_learn_rate = learning_rate * (1 / (1 + decay*iteration)) 
+    
+    #param updates with momentum
+     #If momentum == TRUE in parameter initialization, then weights_momentum
+     #(and implictly, bias_momentum) will exist
+    if (exists("weight_momentums", where = layer_forward)) {
+      #current momentums
+      weight_momentums = layer_forward$weight_momentums
+      bias_momentums = layer_forward$bias_momentums
+      
+      #Update weights & biases with momentum:
+      #Take prior updates X retainment factor (the "momentum rate"),
+      #and update with current gradients
+      weight_update = 
+        (momentum_rate*weight_momentums) - (currnt_learn_rate*weight_gradients)
+      bias_update = 
+        (momentum_rate*bias_momentums) - (currnt_learn_rate*bias_gradients)
+      #update params with the calculated updates
+      weights = current_weights + weight_update
+      biases = current_biases + bias_update
+      #also update momentums
+      weight_momentums = weight_update
+      bias_momentums = bias_update
+      #save:
+      list("weights" = weights, "biases" = biases, "lr" = currnt_learn_rate,
+           "weight_momentums" = weight_momentums, 
+           "bias_momentums" = bias_momentums)
+    } else {
+      
+    #param updates without momentum (vanilla)
+      #calculate updates
+      weight_update = -currnt_learn_rate*weight_gradients
+      bias_update = -currnt_learn_rate*bias_gradients
+      #apply updates
+      weights = current_weights + weight_update
+      biases = current_biases + bias_update
+      #save:
+      list("weights" = weights, "biases" = biases, "lr" = currnt_learn_rate)
+    }
+    
+})
+## AdaGrad ##
+#NOTE: must initialize params with cache==TRUE
+optimizer_AdaGrad = list(
+  update_params = function(layer_forward, layer_backward, #required
+                           learning_rate = 1,
+                           decay = 0, iteration = 1,
+                           epsilon = 1e-7 
+                           ){
+    #current params
+    current_weights = layer_forward$weights
+    current_biases = layer_forward$biases
+    #gradients
+    weight_gradients = layer_backward$dweights
+    bias_gradients = layer_backward$dbiases
+    
+    #learning rate
+    currnt_learn_rate = learning_rate * (1 / (1 + decay*iteration)) 
+    
+    #cache
+    ##update cache with squared current gradients
+    weight_cache = layer_forward$weight_cache + weight_gradients^2
+    bias_cache = layer_forward$bias_cache + bias_gradients^2
+    
+    #SGD param updates with normalization 
+      #calculate updates
+      weight_update = -currnt_learn_rate*weight_gradients /
+                        (sqrt(weight_cache) + epsilon)
+      bias_update = -currnt_learn_rate*bias_gradients /
+                        (sqrt(bias_cache) + epsilon)
+      #apply updates
+      weights = current_weights + weight_update
+      biases = current_biases + bias_update
+        #save:
+        list("weights" = weights, "biases" = biases, "lr" = currnt_learn_rate,
+             "weight_cache" = weight_cache, "bias_cache" = bias_cache)
+} ##these are the new params to be passed on to the layers when loop restarts
+)
+
+## RMSProp ##
+#NOTE: must initialize params with cache==TRUE
+optimizer_RMSProp = list(
+  update_params = function(layer_forward, layer_backward, #required
+                           learning_rate = 0.001,
+                           decay = 0, iteration = 1,
+                           epsilon = 1e-7,
+                           rho = 0.9
+                           ){
+    #current params
+    current_weights = layer_forward$weights
+    current_biases = layer_forward$biases
+    #gradients
+    weight_gradients = layer_backward$dweights
+    bias_gradients = layer_backward$dbiases
+    
+    #learning rate
+    currnt_learn_rate = learning_rate * (1 / (1 + decay*iteration)) 
+    
+    #cache
+    ##update cache with squared current gradients
+    weight_cache = rho * layer_forward$weight_cache + 
+                  (1-rho) * weight_gradients^2
+    bias_cache = rho * layer_forward$bias_cache + 
+                  (1-rho) * bias_gradients^2
+    
+    #SGD param updates with normalization 
+      #calculate updates
+      weight_update = -currnt_learn_rate*weight_gradients /
+                        (sqrt(weight_cache) + epsilon)
+      bias_update = -currnt_learn_rate*bias_gradients /
+                        (sqrt(bias_cache) + epsilon)
+      #apply updates
+      weights = current_weights + weight_update
+      biases = current_biases + bias_update
+        #save:
+        list("weights" = weights, "biases" = biases, "lr" = currnt_learn_rate,
+             "weight_cache" = weight_cache, "bias_cache" = bias_cache)
+} ##these are the new params to be passed on to layers when the loop restarts
+)
+
+## Adam ##
+#NOTE: must intialize paramters with both cache AND momentum
+optimizer_Adam = list(
+  update_params = function(layer_forward, layer_backward, #required
+                           learning_rate = 0.001,
+                           decay = 0, iteration = 1,
+                           epsilon = 1e-7,
+                           beta_1 = 0.9, beta_2 = 0.999
+                           ){
+    #current params
+    current_weights = layer_forward$weights
+    current_biases = layer_forward$biases
+    #gradients
+    weight_gradients = layer_backward$dweights
+    bias_gradients = layer_backward$dbiases
+    
+    #learning rate
+    currnt_learn_rate = learning_rate * (1 / (1 + decay*iteration)) 
+    
+    #momentums
+    #update momentums with current gradients and bias correct
+    weight_momentums = 
+      (beta_1*layer_forward$weight_momentums + (1-beta_1)*weight_gradients ) /
+                              (1 - (beta_1^iteration )) ##bias correction
+    
+    bias_momentums = 
+      (beta_1*layer_forward$bias_momentums + (1-beta_1)*bias_gradients) /
+                              (1 - (beta_1^iteration))
+                    
+
+    #cache
+    #update cache with squared gradients and bias correct
+    weight_cache = 
+      (beta_2*layer_forward$weight_cache + (1-beta_2)*weight_gradients^2) /
+                              (1 - (beta_2^iteration)) ##bias correction
+
+    bias_cache = 
+      (beta_2*layer_forward$bias_cache + (1-beta_2)*bias_gradients^2) /
+                              (1 - (beta_2^iteration))
+    
+    #calculate param updates (with momentums, and normalize with cache)
+    weight_update = -currnt_learn_rate*weight_momentums /
+                        (sqrt(weight_cache) + epsilon)
+    bias_update = -currnt_learn_rate*bias_momentums /
+                        (sqrt(bias_cache) + epsilon)
+    
+    #apply updates
+    weights = current_weights + weight_update
+    biases = current_biases + bias_update
+      #save:
+      list("weights" = weights, "biases" = biases, "lr" = currnt_learn_rate,
+           "weight_momentums" = weight_momentums, 
+           "bias_momentums" = bias_momentums,
+           "weight_cache" = weight_cache,
+           "bias_cache" = bias_cache)
+
+}##these are the updated params to be passed back into the layers
+)
+# END NEURAL NET FUNCTIONS
+```
+
+
+And here is our simple function to create some spiral data:  
+
+```{r sim-data}
+## Creating Spiral Data
+#Source: https://cs231n.github.io/neural-networks-case-study/
+sim_data_fn = function(
+  N = 100, # number of points per class
+  D = 2,   # "dimensionality" (number of features)
+  K = 3,   # number of classes
+  random_order = FALSE #T: random order of classes (harder task)
+){
+   X = data.frame() # data matrix (each row = single sample)
+   y = data.frame() # class labels
+
+for (j in (1:K)){
+  r = seq(0.05,1,length.out = N) # radius
+  t = seq((j-1)*4.7,j*4.7, length.out = N) + rnorm(N, sd = 0.3) # theta
+  Xtemp = data.frame(x =r*sin(t) , y = r*cos(t)) 
+  ytemp = data.frame(matrix(j, N, 1))
+  X = rbind(X, Xtemp)
+  y = rbind(y, ytemp)
+  }
+spiral_data = cbind(X,y)
+colnames(spiral_data) = c(colnames(X), 'label')
+
+# Want randomly ordered labels?
+if (random_order==TRUE) {spiral_data$label = sample(1:3, size = N*K, 
+                                                    replace = TRUE)}
+return(spiral_data)
+}
+```
+
+# Evaluating Model Performance
+## Test Data
+Training a machine learning model repeatedly on training data will generally always lead to fairly high performance, since the model can essentially memorize the data. However, models are only useful if they are generalizable - that is, if they can be used to make predictions on out-of-sample, never-before seen, "test" data. This is especially relevant with neural networks, since the enormous number of parameters (think about all the weights and biases we are tweaking) makes overfitting a common issue.  
+
+As a start, we will create some test data using the spiral data generator.
+
+```{r}
+set.seed(2)
+#First Create Training Data
+spiral_train = sim_data_fn(N = 100, K = 3)
+X_train = spiral_train[,c("x","y")] ## leave out 'label'
+
+#Then Create Testing Data
+spiral_test = sim_data_fn(N = 100, K = 3)
+X_test = spiral_test[,c("x","y")] 
+
+```
+
+```{r}
+library(ggplot2)
+ggplot() +
+ geom_point(data = spiral_train,
+            aes(x = x, y = y, color = as.factor(label)), alpha = 0.2) +
+ geom_point(data = spiral_test, 
+            aes(x = x, y = y, color = as.factor(label))) 
+
+
+```
+
+
+Then, we can train our model on the training dataset and test it on the testing. I train the model over 1000 epochs using 1 hidden layer with ReLU activation and then utilizing the Adam optimizer.  
+**TRAIN**  
+
+```{r epoch-loop1}
+set.seed(1) ##set seed for results replication
+
+#Inputs - Training Features
+X_train = as.matrix(X_train)
+
+#Initalize Weights & Biases Outside of Loop
+## Set momentum & cache to TRUE to use Adam optimizer
+l1_params = init_params(n_inputs = 2,     ## ncol(spiral_X) would also work
+                        n_neurons = 64,   ## = to desired # neurons in layer 
+                        momentum = TRUE, cache = TRUE)
+l2_params = init_params(n_inputs = 64,    ## = to n_neurons in prior layer
+                        n_neurons = 3,    ## = to desired # neurons in layer
+                        momentum = TRUE, cache = TRUE)
+
+# EPOCH LOOP
+tot_epochs = 1000L
+
+for (epoch in 1:tot_epochs) {
+#forward
+layer1 = layer_dense$forward(inputs = X_train, 
+                             n_neurons = 64,
+                             parameters = l1_params)
+  layer1_relu = activation_ReLU$forward(input_layer = layer1$output)
+      layer2 = layer_dense$forward(inputs = layer1_relu$output, 
+                                   n_neurons = 3,
+                                   parameters = l2_params)
+          output = 
+          activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
+                                                  y_true = spiral_train$label)
+              #metrics:
+              LOSS = output$loss
+              PRED = max.col(output$softmax_output, ties.method = "random") 
+              ACC = mean(PRED==spiral_train$label, na.rm=T)
+
+          #backward
+          loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward(
+                                      dvalues = output$softmax_output, 
+                                      y_true = spiral_train$label)
+      l2_b = layer_dense$backward(inputs = layer2$inputs,
+                            weights = layer2$weights,
+                            dvalues = loss_softm_b$dinputs)
+  l1_relu_b = activation_ReLU$backward(inputs = layer1_relu$inputs,
+                                       dvalues = l2_b$dinputs)     
+l1_b = layer_dense$backward(inputs = layer1$inputs,
+                            weights = layer1$weights,
+                            dvalues = l1_relu_b$dinputs)      
+
+#optimize
+l1_optim_params = optimizer_Adam$update_params(layer_forward = layer1,
+                                       layer_backward = l1_b,
+                                       learning_rate = 0.02,
+                                       decay = 5e-7,iteration = epoch,
+                                       beta_1 =  0.5, beta_2 = 0.5)
+l2_optim_params = optimizer_Adam$update_params(layer_forward = layer2,
+                                       layer_backward = l2_b,
+                                       learning_rate = 0.02,
+                                       decay = 5e-7, iteration = epoch,
+                                       beta_1 = 0.5, beta_2 = 0.5)
+#update weights & biases
+l1_params = l1_optim_params
+l2_params = l2_optim_params
+
+  #repeat w new weights,biases, & momentums...
+##  
+#Status Report:
+  if (epoch == 1){print(c("epoch","ovrflw err","loss","accuracy", "learn rate"))}
+  if (epoch %in% seq(0,tot_epochs,by=100)){
+        print(c( epoch, 
+                 sum(is.nan(output$softmax_output)),#make sure NaN error is gone
+                 LOSS,
+                 ACC,
+                 l1_optim_params$lr) )} #(include learn rate)
+
+
+#Save Final Metrics:
+  if (epoch==tot_epochs){
+             out = list("loss"=LOSS,
+                         "accuracy"=ACC,
+                         "predictions"=PRED)}
+}#end loop
+
+```
+
+Now that we've trained the model, it has our optimal parameters saved in each layer, so we can simply put our test data through the forward pass and see what the model predicts. (The key objects here are the `l1_params` & `l2_params`, which store the weights & biases for each layer, but it is crucial that the layer shape is identical).  
+**Test**  
+```{r}
+# Inputs - Test Features
+X_test = as.matrix(X_test)
+
+#Forward-pass the test data
+layer1 = layer_dense$forward(inputs = X_test, 
+                             n_neurons = 64,
+                             parameters = l1_params)
+  layer1_relu = activation_ReLU$forward(input_layer = layer1$output)
+      layer2 = layer_dense$forward(inputs = layer1_relu$output, 
+                                   n_neurons = 3,
+                                   parameters = l2_params)
+          output = 
+          activation_loss_SoftmaxCrossEntropy$forward(
+                                  inputs = layer2$output,
+                                  y_true = spiral_test$label) ##change to test
+              #metrics:
+              LOSS = output$loss
+              PRED = max.col(output$softmax_output, ties.method = "random") 
+              ACC = mean(PRED==spiral_test$label, na.rm=T)  ##change to test
+
+#Results:
+print(paste("Loss:", round(LOSS,10), "Accuracy:", round(ACC,6)))              
+```
+
+```{r}
+plot(spiral_test$x, spiral_test$y, col = PRED)
+```
+
+The results are fairly impressive. In 1000 epochs, the model can perfectly predict the labels of the training data, but is still generalizable enough that it can predict the test labels with 98% accuracy.  
+
+## Cross Validation
+Evaluating models and tuning hyperparameters is often done using a validation set, often with cross-validation (see Introduction to Statistical Learning, Chapter 5, for an in-depth discussion).  
+
+
+# Regularization
+Regularization methods impose penalties on the parameters (the weights & biases) that are designed to keep the parameters small, pulling them towards zero (as in lasso or ridge regression). Smaller weights & biases helps to prevent overfitting and thus improve the generalizabilty of a model. They will also help prevent against exploding gradients.  
+L1 Regularization - the sum of the absolute values of all the weights & biases.  
+L2 Regularization - the sum of the squared weights & biases.  
+L1 penalizes all paramaters "equally" in the sense that each paramter contributes to the loss exactly its value, wheras L2's nonlinear form causes larger parameters to contribute more to the loss (it is "harsher" on larger values).  
+L1 and L2 loss are typically mutliplied by a fraction, **lambda**, that determines how big of an impact the regularization should make.   
+
+Since we are adding to the loss function, we'll need to backpropagate through the L1 and L2 loss functions. I won't include any of the derivative calculations, but just their final solutions:  
+The partial derivative of L2 with respect to weights simplifies to $2\lambda w_m $, which means that we just need to multiply all of the weights by 2*lambda. (This follows identically for biases).  
+The partial derivative of L1 with respect to weights simplifes to:  
+$\lambda \left\{\begin{matrix}  1 \ if \ w_m > 0 \\ -1 \ if \ w_m < 0 \end{matrix}\right.$  
+Which follows from taking the derivative of an absolute value function. This will be easy to implement.   
+
+**Implement**  
+Regularization losses are calculated separately (for each layer) and then summed with the data loss calculated by our loss function, thus we'll add this as a separate function. The function will receive the associated layer, which is where we will actually set the regularization hyperparameters.
+
+```{r reg-loss}
+regularization_loss = function(layer){
+  #Regularization hyperparams:
+  layer_reg = layer$regularization ##a list of the set lambda values
+  
+  #L1-regularization: weights
+  l1_weight_apply = layer_reg$weight_L1 * sum(abs(layer$weights))
+  #L1-regularization: bias
+  l1_bias_apply = layer_reg$bias_L1 * sum(abs(layer$biases))
+  
+  #L2-regularization: weights
+  l2_weight_apply = layer_reg$weight_L2 * sum(layer$weights^2)
+  #L2-regularization: biases
+  l2_bias_apply = layer_reg$bias_L2 * sum(layer$biases^2)
+  
+  #Overall regularization loss
+  reg_loss = l1_weight_apply + l1_bias_apply + l2_weight_apply + l2_bias_apply
+  #save:
+  return(reg_loss)
+}
+```
+
+
+In the layer_dense function we edit the forward pass to offer settings for regularization, which are automatically saved so that they can be accessed by the regularization_loss function.  
+Then, in the backward pass we apply the derivatives of the L1 and L2 functions to the weights & biases, which will only impact the backprop process if the regularization is actually used (i.e, the values are greater than zero).  
+_Note: could probs get rid of the logic since multiply by zero_  
+```{r}
+layer_dense = list(
+## FORWARD PASS 
+ forward = function(    
+            inputs,      
+            n_neurons, 
+            parameters, ## from initialize_parameters
+            weight_L1 = 0, weight_L2 = 0,  ##regularization
+            bias_L1 = 0, bias_L2 = 0
+){
+   
+ n_inputs = ncol(inputs)
+ weights = parameters$weights
+ biases = parameters$biases
+ #Forward Pass 
+ output = inputs%*%weights + biases[col(inputs%*%weights)]
+ 
+ #Regularization values:
+ regularization = list("weight_L1" = weight_L1, "weight_L2" = weight_L2,
+                       "bias_L1" = bias_L1, "bias_L2" = bias_L2)
+
+ #SAVING:
+ #then layer saves momentum only
+ if (exists(x = "weight_momentums", where = parameters) & 
+     !exists(x = "weight_cache", where = parameters)){
+ list("output" = output, ##for forward pass
+      "inputs" = inputs, "weights"= weights, "biases" = biases, ##for backprop
+      "weight_momentums"=parameters$weight_momentums, ##for momentum
+      "bias_momentums"=parameters$bias_momentums,
+      "regularization" = regularization)  ##for regularization
+ #if momentum==FALSE & cache==TRUE, saves cache only
+ } else if (!exists(x = "weight_momentums", where = parameters) &
+            exists(x = "weight_cache", where = parameters)){
+ list("output" = output, ##for forward pass
+      "inputs" = inputs, "weights"= weights, "biases" = biases, ##for backprop
+      "weight_cache"=parameters$weight_cache, ##for cache
+      "bias_cache"=parameters$bias_cache,
+      "regularization" = regularization)
+
+ #if momentum==TRUE & cache==TRUE, saves both
+ } else if (exists(x = "weight_momentums", where = parameters) &
+            exists(x = "weight_cache", where = parameters)){
+ list("output" = output, ##for forward pass
+      "inputs" = inputs, "weights"= weights, "biases" = biases, ##for backprop
+      "weight_momentums"=parameters$weight_momentums, ##for momentum
+      "bias_momentums"=parameters$bias_momentums,
+      "weight_cache"=parameters$weight_cache, ##for cache
+      "bias_cache"=parameters$bias_cache,
+      "regularization" = regularization)
+
+ #else both==FALSE, ignore momentum & cache
+ } else {
+   #otherwise, just save
+ list("output" = output, ##for forward pass
+      "inputs" = inputs, "weights"= weights, "biases" = biases, ##for backprop
+      "regularization" = regularization)
+      }
+
+ },#end fwd
+ 
+# BACKWARD
+  backward = function(dvalues, layer){
+    
+    #Gradients on parameters
+    dweights = t(layer$inputs)%*%dvalues
+    dbiases = colSums(dvalues)
+    
+    #Gradients on regularization
+    ##regularization hyperparams:
+    layer_reg = layer$regularization ##a list of the set lambda values
+
+    ##L1 Weights##
+    if (layer_reg$weight_L1 > 0){
+    dL1 = matrix(1, nrow = nrow(layer$weights), ncol = ncol(layer$weights))
+      #make matrix filled with 1s
+    dL1[layer$weight < 0] = -1
+      #convert matrix value to -1 where weight is less than zero
+    dweights = dweights + layer_reg$weight_L1 * dL1
+    }
+    ##L2 Weights##
+    if (layer_reg$weight_L2 > 0){
+    dweights = dweights + 2 * layer_reg$weight_L2 * layer$weights
+    }                     #2 * lambda * weights
+    
+    ##L1 Biases##
+    if (layer_reg$bias_L1 > 0){
+    dL1 = matrix(1, nrow = nrow(layer$biases), ncol = ncol(layer$biases))
+      #make matrix filled with 1s
+    dL1[layer$bias < 0] = -1
+      #convert matrix value to -1 where weight is less than zero
+    dbiases = dbiases + layer_reg$bias_L1 * dL1
+    }
+    ##L2 Biases##
+    if (layer_reg$bias_L2 > 0){
+    dbiases = dbiases + 2 * layer_reg$bias_L2 * layer$biases
+    }
+    
+    #Gradients on values
+    dinputs = dvalues%*%t(layer$weights) 
+    
+    #saves:
+    list("dinputs"=dinputs,
+         "dweights"=dweights,
+         "dbiases"=dbiases)
+}#end bwd
+)
+
+```
+
+
+
+Let's test the changes. Note that I only utilize regularization with layer 1 since we typically only use regularization with hidden layers (and layer 2 is an output layer). Also note that I've edited the backwards pass so that it just needs to receive the layer object it is associated with (a change I should have made a while ago, since it was redundant to separately provide `layer$weights` and `layer$inputs`).   
+
+```{r}
+set.seed(1) ##set seed for results replication
+
+#Inputs - Training Features
+X_train = as.matrix(X_train)
+
+#Initalize Weights & Biases Outside of Loop
+## Set momentum & cache to TRUE to use Adam optimizer
+l1_params = init_params(n_inputs = 2,     ## ncol(spiral_X) would also work
+                        n_neurons = 64,   ## = to desired # neurons in layer 
+                        momentum = TRUE, cache = TRUE)
+l2_params = init_params(n_inputs = 64,    ## = to n_neurons in prior layer
+                        n_neurons = 3,    ## = to desired # neurons in layer
+                        momentum = TRUE, cache = TRUE)
+
+# EPOCH LOOP
+tot_epochs = 1000L
+
+for (epoch in 1:tot_epochs) {
+#forward
+layer1 = layer_dense$forward(inputs = X_train, 
+                             n_neurons = 64,
+                             parameters = l1_params,
+                             weight_L2 = 5e-4, bias_L2 = 5e-4)
+  layer1_relu = activation_ReLU$forward(input_layer = layer1$output)
+      layer2 = layer_dense$forward(inputs = layer1_relu$output, 
+                                   n_neurons = 3,
+                                   parameters = l2_params)
+          output = 
+          activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
+                                                  y_true = spiral_train$label)
+          reg_loss = regularization_loss(layer1) +
+                     regularization_loss(layer2) ##=0
+              #metrics:
+              LOSS = output$loss + reg_loss
+              DATA_LOSS = output$loss
+              REG_LOSS = reg_loss
+              PRED = max.col(output$softmax_output, ties.method = "random") 
+              ACC = mean(PRED==spiral_train$label, na.rm=T)
+
+          #backward
+          loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward(
+                                      dvalues = output$softmax_output, 
+                                      y_true = spiral_train$label)
+      l2_b = layer_dense$backward(layer = layer2,
+                                  dvalues = loss_softm_b$dinputs)
+  l1_relu_b = activation_ReLU$backward(inputs = layer1_relu$inputs,
+                                       dvalues = l2_b$dinputs)     
+l1_b = layer_dense$backward(layer = layer1,
+                            dvalues = l1_relu_b$dinputs)      
+
+#optimize
+l1_optim_params = optimizer_Adam$update_params(layer_forward = layer1,
+                                       layer_backward = l1_b,
+                                       learning_rate = 0.02,
+                                       decay = 5e-7,iteration = epoch,
+                                       beta_1 =  0.5, beta_2 = 0.5)
+l2_optim_params = optimizer_Adam$update_params(layer_forward = layer2,
+                                       layer_backward = l2_b,
+                                       learning_rate = 0.02,
+                                       decay = 5e-7, iteration = epoch,
+                                       beta_1 = 0.5, beta_2 = 0.5)
+#update weights & biases
+l1_params = l1_optim_params
+l2_params = l2_optim_params
+
+  #repeat w new weights,biases, & momentums...
+##  
+#Status Report:
+  if (epoch == 1){print(c("epoch","ovrflw err",
+                          "loss","data_loss",
+                          "acc", "lr"))}
+  if (epoch %in% seq(0,tot_epochs,by=100)){
+        print(c( epoch, 
+                 sum(is.nan(output$softmax_output)),#make sure NaN error is gone
+                 LOSS,
+                 DATA_LOSS,
+                 ACC,
+                 l1_optim_params$lr) )} #(include learn rate)
+
+
+#Save Final Metrics:
+  if (epoch==tot_epochs){
+             out = list("loss"=LOSS,
+                         "accuracy"=ACC,
+                         "predictions"=PRED)}
+}#end loop
+
+```
+
+Overall, the training performance suffers slightly compared to the model above without regularization. Test performance:
+```{r}
+# Inputs - Test Features
+X_test = as.matrix(X_test)
+
+#Forward-pass the test data
+layer1 = layer_dense$forward(inputs = X_test, 
+                             n_neurons = 64,
+                             parameters = l1_params,
+                             weight_L2 = 5e-4, bias_L2 = 5e-4)
+  layer1_relu = activation_ReLU$forward(input_layer = layer1$output)
+      layer2 = layer_dense$forward(inputs = layer1_relu$output, 
+                                   n_neurons = 3,
+                                   parameters = l2_params)
+          output = 
+          activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
+                                                  y_true = spiral_test$label)
+              #metrics:
+              LOSS = output$loss
+              PRED = max.col(output$softmax_output, ties.method = "random") 
+              ACC = mean(PRED==spiral_test$label, na.rm=T)  ##change to test
+
+#Results:
+print(paste("Loss:", round(LOSS,10), "Accuracy:", round(ACC,6)))              
+```
+
