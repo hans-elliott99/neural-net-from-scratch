@@ -1,5 +1,5 @@
 ---
-title: "part3"
+title: "Generalization: Test Data, Regularization, and Dropout"
 author: "Hans Elliott"
 date: "4/18/2022"
 output: github_document
@@ -504,7 +504,7 @@ optimizer_Adam = list(
 
 And here is our simple function to create some spiral data:  
 
-```{r sim-data}
+```{r sim-data-fn}
 ## Creating Spiral Data
 #Source: https://cs231n.github.io/neural-networks-case-study/
 sim_data_fn = function(
@@ -540,7 +540,7 @@ Training a machine learning model repeatedly on training data will generally alw
 
 As a start, we will create some test data using the spiral data generator.
 
-```{r}
+```{r sim-data}
 set.seed(2)
 #First Create Training Data
 spiral_train = sim_data_fn(N = 100, K = 3)
@@ -958,4 +958,221 @@ layer1 = layer_dense$forward(inputs = X_test,
 #Results:
 print(paste("Loss:", round(LOSS,10), "Accuracy:", round(ACC,6)))              
 ```
+The model generalizes fairly well, with a test Accuracy of 97%, which corresponds to 291/300 observations being correctly classified.  
+
+# Dropout
+We're going to go ahead and implement another feature: dropout. Dropout layers randomly disable some of their neurons during each training pass, preventing the network from becoming too dependent on specific pathways, or for neurons from becoming over-sepcialized. [NNFS](nnfs.io) cites dropout as helping with "co-adoption," where a neuron depends heavily on the output of a previous neuron rather than learning the underlying function on its own, and helping with noise in the training data, since it ideally leads to more neurons working together. This will help with our overall goal of generalization - that is, trianing a model that will perform well on never-before-seen test data.  
+We will implement dropout by applying a "filter" to the layer that is the same shape as the layer's output filled with numbers drawn from the Bernoulli distribution (values of either 1 or 0 - which I implement using a binomial distribution that can only take value 0 or 1). Thus, the neurons that are randomly selected to be dropped out will have their output zeroed out (effectively disabling them) while the other neurons will have their values multiplied by 1 (i.e., they will remain unaffected).   
+We also need to scale the remaining output by (1-dropout_rate). Why? Consider that if we drop a fraction of neurons, the input into a neuron into the next layer, which is the weighted sum of all the outputs of the previous layer, will be mechanically smaller. This would be fine, except that when we get to test data we won't want to dropout any of our neurons (not after they've all learned so much!) and thus the testing state of the model will be quite different from the training stage. By dividing by (1-dropout_rate), which will of course be a fraction between 0 and 1, we will be inflating the output values which are not turned to zero. (During the prediction phase, we will simply ignore drop out.)
+
+Example:
+
+```{r dropout-ex}
+dropout_rate = 0.3  ##ratio of neurons in the layer we want to disable
+example_output = ##from a layer with 10 neurons
+             c(0.27, -1.03, 0.67, 0.99, 0.05, -0.37, -2.01, 1.13, -0.07, 0.73)
+
+
+dropout_filter = rbinom(n = length(example_output), ##vector=shape of output
+                         size = 1,                    ##choose between 0 or 1
+                         p = (1-dropout_rate))        ##p = prob of a 1 so
+                                            ##1-dropout rate gives what we want
+example_output = (example_output * dropout_filter) / (1-dropout_rate)
+
+dropout_filter
+example_output
+```
+
+We will also have to implement the backwards pass stage of the dropout method, by calculating the partial derivative. This simplifies quite easily to ri/(1-dropout_rate), where r is the value from the dropout filter at index i. Thus, the derivative is either 1/(1-dropout_rate) or 0.  
+Alright, let's code this up. The dropout layer will be a separate function applied after any hidden layer to which we want to apply dropout. It will take the output of the hidden-layer's activation function. Thus, our new layer paradigm will take the form:  
+```
+l1 = layer_dense$forward(paramaters)
+  l1_relu = activation_ReLU$forward(l1)
+    l1_dropout = layer_dropout$forward(l1_relu, dropout_rate = 0.3)
+     ...
+```
+**Dropout Layer**   
+
+```{r layer_dropout}
+### Dropout Layer ----
+layer_dropout = list(
+## FORWARD PASS
+  forward = function(
+              input_layer, ##layer to apply dropout to
+              dropout_rate ##rate of neuron deactivation
+) {
+  inputs = input_layer$output   ##the outputs from the previous layer
+  
+  #Dropout mask/filter
+  dropout_filter = matrix(data = 
+                           rbinom(n = nrow(inputs)*ncol(inputs),
+                                  size = 1,        
+                                  p = (1-dropout_rate)),
+                          nrow = nrow(inputs),
+                          ncol = ncol(inputs)) / 
+                  (1 - dropout_rate)
+  ##Creates matrix that is shape of the input layer's output (from nrow, ncol)
+  ##and fills it with 1s and 0s from "Bernoulli". The length of the rbinom 
+  ##output is equal to nrow*ncol so it fills the input layer's shape. 
+  ##We also apply the scaling step to the filter directly since it makes the 
+  ##backprop step even simpler.
+  
+  ##Apply mask to inputs and scale by (1 - dropout_rate)
+  output = inputs * dropout_filter
+  
+  list("output" = output, "dropout_filter" = dropout_filter)
+
+},
+## BACKWARD PASS
+  backward = function(
+            next_layer = "layer object that comes next in forward pass",
+            #derivative values being passed back from next layer
+            layer_dropout  ##the dropout layer object              
+){
+  dvalues = next_layer$dinputs ##extract the derivative object from the layer
+  dinputs = dvalues * layer_dropout$dropout_filter    
+  ##Thus if the filter is 0 at the given index, the derivative is 0
+  ##And if the filter is 1/(1-dropout_rate) at the given index, 
+  ##the derivative is dvalues * 1/(1-dropout_rate)
+  list("dinputs" = dinputs)
+  }
+
+)#end layer_dropout
+```
+
+
+
+
+
+
+Finally, let's test it once:
+
+```{r}
+set.seed(1) ##set seed for results replication
+
+#Inputs - Training Features
+X_train = as.matrix(X_train)
+
+#Initalize Weights & Biases Outside of Loop
+## Set both momentum & cache to TRUE to use Adam optimizer
+l1_params = init_params(n_inputs = 2,     ## ncol(spiral_X) would also work
+                        n_neurons = 128,   ## = to desired # neurons in layer 
+                        momentum = TRUE, cache = TRUE)
+l2_params = init_params(n_inputs = 128,    ## = to n_neurons in prior layer
+                        n_neurons = 3,    ## = to desired # neurons in layer
+                        momentum = TRUE, cache = TRUE)
+
+# EPOCH LOOP
+tot_epochs = 1000L
+
+for (epoch in 1:tot_epochs) {
+#forward
+layer1 = layer_dense$forward(inputs = X_train, 
+                             n_neurons = 128,
+                             parameters = l1_params,
+                             weight_L2 = 5e-4, bias_L2 = 5e-4)
+  layer1_relu = activation_ReLU$forward(input_layer = layer1$output)
+    layer1_dropout = layer_dropout$forward(input_layer = layer1_relu,
+                                           dropout_rate = 0.1)
+##NEW: pass dropout layer on to the next dense layer so it can take its outputs
+      layer2 = layer_dense$forward(inputs = layer1_dropout$output,
+                                   n_neurons = 3,
+                                   parameters = l2_params)
+          output = 
+          activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
+                                                  y_true = spiral_train$label)
+          reg_loss = regularization_loss(layer1) +
+                     regularization_loss(layer2) ##=0
+              #metrics:
+              LOSS = output$loss + reg_loss
+              DATA_LOSS = output$loss
+              REG_LOSS = reg_loss
+              PRED = max.col(output$softmax_output, ties.method = "random") 
+              ACC = mean(PRED==spiral_train$label, na.rm=T)
+
+          #backward
+          loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward(
+                                      dvalues = output$softmax_output, 
+                                      y_true = spiral_train$label)
+      l2_b = layer_dense$backward(layer = layer2,
+                                  dvalues = loss_softm_b$dinputs)
+##NEW: backprop dropout layer
+    l1_drop_b = layer_dropout$backward(l2_b, layer_dropout = layer1_dropout)
+  l1_relu_b = activation_ReLU$backward(inputs = layer1_relu$inputs,
+                                       dvalues = l1_drop_b$dinputs)     
+l1_b = layer_dense$backward(layer = layer1,
+                            dvalues = l1_relu_b$dinputs)      
+
+#optimize
+l1_optim_params = optimizer_Adam$update_params(layer_forward = layer1,
+                                       layer_backward = l1_b,
+                                       learning_rate = 0.02,
+                                       decay = 5e-7,iteration = epoch,
+                                       beta_1 =  0.5, beta_2 = 0.5)
+l2_optim_params = optimizer_Adam$update_params(layer_forward = layer2,
+                                       layer_backward = l2_b,
+                                       learning_rate = 0.02,
+                                       decay = 5e-7, iteration = epoch,
+                                       beta_1 = 0.5, beta_2 = 0.5)
+#update weights & biases
+l1_params = l1_optim_params
+l2_params = l2_optim_params
+
+  #repeat w new weights,biases, & momentums...
+##  
+#Status Report:
+  if (epoch == 1){print(c("epoch","ovrflw err",
+                          "loss","data_loss",
+                          "acc", "lr"))}
+  if (epoch %in% seq(0,tot_epochs,by=100)){
+        print(c( epoch, 
+                 sum(is.nan(output$softmax_output)),#exploding gradients?
+                 LOSS,
+                 DATA_LOSS,
+                 ACC,
+                 l1_optim_params$lr) )} #(include learn rate)
+
+
+#Save Final Metrics:
+  if (epoch==tot_epochs){
+             out = list("loss"=LOSS,
+                         "accuracy"=ACC,
+                         "predictions"=PRED)}
+}#end loop
+
+```
+
+The training accuracy suffers slightly with the dropout layer added. Perhaps if we made the hidden layer quite a bit bigger (by adding even more neurons) we could improve performance, or if we trained for more epochs. Let's apply the model to the test data.  
+Again, we don't want to apply and dropout in the test run. Just pass the test data in as inputs and see how the predictions compare to the actual labels.  
+
+```{r}
+# Inputs - Test Features
+X_test = as.matrix(X_test)
+
+#Forward-pass the test data
+layer1 = layer_dense$forward(inputs = X_test, 
+                             n_neurons = 128,
+                             parameters = l1_params,
+                             weight_L2 = 5e-4, bias_L2 = 5e-4)
+  layer1_relu = activation_ReLU$forward(input_layer = layer1$output)
+      layer2 = layer_dense$forward(inputs = layer1_relu$output, 
+                                   n_neurons = 3,
+                                   parameters = l2_params)
+          output = 
+          activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
+                                                  y_true = spiral_test$label)
+              #metrics:
+              LOSS = output$loss
+              PRED = max.col(output$softmax_output, ties.method = "random") 
+              ACC = mean(PRED==spiral_test$label, na.rm=T)  ##change to test
+
+#Results:
+print(paste("Loss:", round(LOSS,10), "Accuracy:", round(ACC,6)))              
+
+```
+
+Again, the test performance suffers compared to the model with no dropout. Still, it is likely that the dropout layer will be an ally as we move on to more difficult learning tasks.  
+
+
+
 
