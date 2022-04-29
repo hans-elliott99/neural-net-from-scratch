@@ -14,7 +14,8 @@ In the last section, we worked on improving model generalization. In addition to
 I've also cleaned up the functions a bit so things run smoother. Here's a list of the updates:   
 - Overall, my changes are a move towards a new system which I think will be easy to implement and will reduce the amount of overhead needed to actually use the functions. Basically, the heart of the process will be the layer objects that get created for each hidden and output layer. The layer objects are full of other objects which they can pass on to the various other functions as needed. That way, all we really have to do is pass on one layer into the next, and the only other arguments we need to specify are hyperparameters.  
 - The `init_params` function will save the n_neurons in addition to all of the parameters since it was redundant to include n_neurons as an argument in both the initialization function and the `layer_dense` function. The `layer_dense` function is updated to extract the n_neurons object from the parameters object.
-- There was some redundancy with the backprop step, where I was specifying "dvalues" as the derivative values being passed back from the next layer into the current layer. I simplify this so that all we have to do is pass back that next layer object (slightly confusing - this is backprop layer corresponding to the forward-pass layer that is the next layer in the forward pass, so technically it is the previous layer in the backprop). I'm calling this argument `d_layer.` The idea is that you just pass back each backpropagated layer sequentially. Thus every backpropagation step takes two simple arguments: the forward pass layer object, and the backward pass layer object of the "next" layer.   
+- Since the init_params fns defines the number of neurons, we will need the optimized paramaters object at the end of backpropagation to also contain a n_neurons object, so that when the forward pass begins again the layer_dense function can find it. This is fairly simple since we are already passing the forward layer object to the optimizer function, and thus it can extract the number of neurons from the forward layer's output matrix - the number of columns in the output matrix corresponds to the number of neurons.  
+- There was some redundancy with the backprop step, where I was specifying "dvalues" as the derivative values being passed back from the next layer into the current layer. I simplify this so that all we have to do is pass back that next layer object (slightly confusing - this is backprop layer corresponding to the forward-pass layer that is the next layer in the forward pass, so technically it is the previous layer in the backprop). I'm calling this argument `d_layer.` The idea is that you just pass back each backpropagated layer sequentially. Thus every backpropagation step takes two simple arguments: the forward pass layer object, and the backward pass layer object of the "next" layer. This works fairly well except
 
 
 ```{r nn-fns}
@@ -81,7 +82,9 @@ layer_dense = list(
             weight_L1 = 0, weight_L2 = 0,  ##regularization
             bias_L1 = 0, bias_L2 = 0
 ){
-   
+  
+ if(is.matrix(inputs) == FALSE ) message("Convert inputs to matrix first")
+ 
  n_inputs = ncol(inputs)
  n_neurons = parameters$n_neurons
  weights = parameters$weights
@@ -133,8 +136,10 @@ layer_dense = list(
  },#end fwd
  
 # BACKWARD
-  backward = function(dvalues, layer){
+  backward = function(d_layer="layer object that occurs prior in backward pass",
+                      layer="the layer object from the forward pass"){
     
+    dvalues = d_layer$dinputs
     #Gradients on parameters
     dweights = t(layer$inputs)%*%dvalues
     dbiases = colSums(dvalues)
@@ -214,9 +219,10 @@ layer_dropout = list(
   backward = function(
             d_layer = "layer object that occurs prior in backward pass",
             #derivative values being passed back from next layer
-            layer_dropout  ##the forward-pass dropout layer object              
+            layer_dropout = "the layer object from the forward pass"
+                                    ##the forward-pass dropout layer object
 ){
-  dvalues = next_layer$dinputs ##extract the derivative object from the layer
+  dvalues = d_layer$dinputs ##extract the derivative object from the layer
   dinputs = dvalues * layer_dropout$dropout_filter    
   ##Thus if the filter is 0 at the given index, the derivative is 0
   ##And if the filter is 1/(1-dropout_rate) at the given index, 
@@ -232,21 +238,23 @@ activation_ReLU = list(
   #FORWARD PASS
   forward = function(input_layer){
     
-    output = matrix(sapply(X = input_layer, 
+    inputs = input_layer$output
+    output = matrix(sapply(X = inputs, 
                     function(X){max(c(0, X))}
                     ), 
-                  nrow = nrow(input_layer), ncol = ncol(input_layer))
+                  nrow = nrow(inputs), ncol = ncol(inputs))
     #ReLU function coerced into a matrix so the shape
     #is maintained (it will be equivalent to that of the input shape)
     
     #Function saves:
-    list("output" = output, "inputs" = input_layer)
-    #And prints
-    #invisible(output)
+    list("output" = output, "inputs" = inputs)
   },
   #BACKWARD PASS
-  backward = function(inputs, d_layer){
+  backward = function(d_layer, layer){
+    
+    inputs = layer$inputs
     dinputs = d_layer$dinputs ##the dinputs from the next layer
+    
     dinputs[inputs <= 0] = 0
     #save:
     list("dinputs"=dinputs)
@@ -288,7 +296,63 @@ activation_Softmax = list(
   }
 )
 
+## Softmax X Cross Entropy ##
+# combined softmax activation fn & cross-entropy loss for faster backprop
+activation_loss_SoftmaxCrossEntropy = list(
+  #FORWARD PASS
+  forward = function(input_layer, y_true){
+    
+    inputs = input_layer$output
+    #output layer's activation function
+    softmax_out = activation_Softmax$forward(inputs)
+    #calculate loss
+    loss = Categorical_CrossEntropy$forward(softmax_out, y_true)
+    #function saves:
+    list("softmax_output"=softmax_out, "loss"=loss) 
+  },
+  #BACKWARD PASS
+  backward = function(dvalues, y_true){
 
+    #Detect number of samples
+    if (is.vector(dvalues)) {      #if one sample
+      samples = 1
+    } else if (is.array(dvalues)) {  #else if multiple samples
+      samples = nrow(dvalues)
+    } else message("error checking shape of inputs")
+    
+    #Reverse One-Hot Encoding
+    #if labels are one-hot encoded, turn them discrete values
+     ##helper function 
+    anti_ohe = function(y_true){
+               unique_classes = ncol(y_true)
+               samples = nrow(y_true)
+               y_true_vec = as.vector(y_true)
+                    
+               class_key = rep(1:unique_classes, each = samples)
+               y_true = class_key[y_true_vec==1]
+                    #selects the classes that correspond to 1s in y_true vector
+                    return(y_true)
+                    }
+     ##check & modify
+    y_true = if(is.array(y_true)){ #if one-hot encoded
+                    #change to sparse
+                    anti_ohe(y_true)
+              } else y_true
+    
+    #Calculate gradient
+     #Copy so we can modify
+     dinputs = dvalues
+     #Calculate gradient
+     #index the prediction array with the sample number and its
+     #true value index, subtracting 1 from these values. Requires discrete,
+     #not one-hot encoded, true labels (explaining the need for the above step)
+     dinputs[cbind(1:samples, y_true)] = dinputs[cbind(1:samples, y_true)] - 1
+     #Normalize gradient
+     dinputs = dinputs/samples
+    #save desired outputs
+    list("dinputs" = dinputs, "samples" = samples, "y_true" = y_true)
+  }
+)
 
 
 ### Loss ----------------------------------------------------------------------
@@ -355,61 +419,7 @@ Categorical_CrossEntropy = list(
   }
 )
 
-## Softmax X Cross Entropy ##
-# combined softmax activation fn & cross-entropy loss for faster backprop
-activation_loss_SoftmaxCrossEntropy = list(
-  #FORWARD PASS
-  forward = function(inputs, y_true){
-    #output layer's activation function
-    softmax_out = activation_Softmax$forward(inputs)
-    #calculate loss
-    loss = Categorical_CrossEntropy$forward(softmax_out, y_true)
-    #function saves:
-    list("softmax_output"=softmax_out, "loss"=loss) 
-  },
-  #BACKWARD PASS
-  backward = function(dvalues, y_true){
 
-    #Detect number of samples
-    if (is.vector(dvalues)) {      #if one sample
-      samples = 1
-    } else if (is.array(dvalues)) {  #else if multiple samples
-      samples = nrow(dvalues)
-    } else message("error checking shape of inputs")
-    
-    #Reverse One-Hot Encoding
-    #if labels are one-hot encoded, turn them discrete values
-     ##helper function 
-    anti_ohe = function(y_true){
-               unique_classes = ncol(y_true)
-               samples = nrow(y_true)
-               y_true_vec = as.vector(y_true)
-                    
-               class_key = rep(1:unique_classes, each = samples)
-               y_true = class_key[y_true_vec==1]
-                    #selects the classes that correspond to 1s in y_true vector
-                    return(y_true)
-                    }
-     ##check & modify
-    y_true = if(is.array(y_true)){ #if one-hot encoded
-                    #change to sparse
-                    anti_ohe(y_true)
-              } else y_true
-    
-    #Calculate gradient
-     #Copy so we can modify
-     dinputs = dvalues
-     #Calculate gradient
-     #index the prediction array with the sample number and its
-     #true value index, subtracting 1 from these values. Requires discrete,
-     #not one-hot encoded, true labels (explaining the need for the above step)
-     dinputs[cbind(1:samples, y_true)] = dinputs[cbind(1:samples, y_true)] - 1
-     #Normalize gradient
-     dinputs = dinputs/samples
-    #save desired outputs
-    list("dinputs" = dinputs, "samples" = samples, "y_true" = y_true)
-  }
-)
 ## Regularization ##
 regularization_loss = function(layer){
   #Regularization hyperparams:
@@ -436,9 +446,11 @@ regularization_loss = function(layer){
 optimizer_SGD = list(
   update_params = function(layer_forward, layer_backward, #required
                            learning_rate = 1,
-                           decay = 0, iteration = 1,
+                           lr_decay = 0, iteration = 1,
                            momentum_rate = 0 
                            ){
+    #extract number of neurons from the forward layers output matrix
+    n_neurons = ncol(layer_forward$output)
     #current params
     current_weights = layer_forward$weights
     current_biases = layer_forward$biases
@@ -447,7 +459,7 @@ optimizer_SGD = list(
     bias_gradients = layer_backward$dbiases
     
     #learning rate
-    currnt_learn_rate = learning_rate * (1 / (1 + decay*iteration)) 
+    currnt_learn_rate = learning_rate * (1 / (1 + lr_decay*iteration)) 
     
     #param updates with momentum
      #If momentum == TRUE in parameter initialization, then weights_momentum
@@ -473,7 +485,8 @@ optimizer_SGD = list(
       #save:
       list("weights" = weights, "biases" = biases, "lr" = currnt_learn_rate,
            "weight_momentums" = weight_momentums, 
-           "bias_momentums" = bias_momentums)
+           "bias_momentums" = bias_momentums,
+           "n_neurons" = n_neurons)
     } else {
       
     #param updates without momentum (vanilla)
@@ -484,7 +497,8 @@ optimizer_SGD = list(
       weights = current_weights + weight_update
       biases = current_biases + bias_update
       #save:
-      list("weights" = weights, "biases" = biases, "lr" = currnt_learn_rate)
+      list("weights" = weights, "biases" = biases, "lr" = currnt_learn_rate,
+           "n_neurons" = n_neurons)
     }
     
 })
@@ -493,9 +507,12 @@ optimizer_SGD = list(
 optimizer_AdaGrad = list(
   update_params = function(layer_forward, layer_backward, #required
                            learning_rate = 1,
-                           decay = 0, iteration = 1,
+                           lr_decay = 0, iteration = 1,
                            epsilon = 1e-7 
                            ){
+    #extract number of neurons from the forward layers output matrix
+    n_neurons = ncol(layer_forward$output)
+
     #current params
     current_weights = layer_forward$weights
     current_biases = layer_forward$biases
@@ -504,7 +521,7 @@ optimizer_AdaGrad = list(
     bias_gradients = layer_backward$dbiases
     
     #learning rate
-    currnt_learn_rate = learning_rate * (1 / (1 + decay*iteration)) 
+    currnt_learn_rate = learning_rate * (1 / (1 + lr_decay*iteration)) 
     
     #cache
     ##update cache with squared current gradients
@@ -522,7 +539,8 @@ optimizer_AdaGrad = list(
       biases = current_biases + bias_update
         #save:
         list("weights" = weights, "biases" = biases, "lr" = currnt_learn_rate,
-             "weight_cache" = weight_cache, "bias_cache" = bias_cache)
+             "weight_cache" = weight_cache, "bias_cache" = bias_cache,
+             "n_neurons" = n_neurons)
 } ##these are the new params to be passed on to the layers when loop restarts
 )
 
@@ -531,10 +549,13 @@ optimizer_AdaGrad = list(
 optimizer_RMSProp = list(
   update_params = function(layer_forward, layer_backward, #required
                            learning_rate = 0.001,
-                           decay = 0, iteration = 1,
+                           lr_decay = 0, iteration = 1,
                            epsilon = 1e-7,
                            rho = 0.9
                            ){
+    #extract number of neurons from the forward layers output matrix
+    n_neurons = ncol(layer_forward$output)
+
     #current params
     current_weights = layer_forward$weights
     current_biases = layer_forward$biases
@@ -543,7 +564,7 @@ optimizer_RMSProp = list(
     bias_gradients = layer_backward$dbiases
     
     #learning rate
-    currnt_learn_rate = learning_rate * (1 / (1 + decay*iteration)) 
+    currnt_learn_rate = learning_rate * (1 / (1 + lr_decay*iteration)) 
     
     #cache
     ##update cache with squared current gradients
@@ -563,7 +584,8 @@ optimizer_RMSProp = list(
       biases = current_biases + bias_update
         #save:
         list("weights" = weights, "biases" = biases, "lr" = currnt_learn_rate,
-             "weight_cache" = weight_cache, "bias_cache" = bias_cache)
+             "weight_cache" = weight_cache, "bias_cache" = bias_cache,
+             "n_neurons" = n_neurons)
 } ##these are the new params to be passed on to layers when the loop restarts
 )
 
@@ -572,10 +594,13 @@ optimizer_RMSProp = list(
 optimizer_Adam = list(
   update_params = function(layer_forward, layer_backward, #required
                            learning_rate = 0.001,
-                           decay = 0, iteration = 1,
+                           lr_decay = 0, iteration = 1,
                            epsilon = 1e-7,
                            beta_1 = 0.9, beta_2 = 0.999
                            ){
+    #extract number of neurons from the forward layers output matrix
+    n_neurons = ncol(layer_forward$output)
+
     #current params
     current_weights = layer_forward$weights
     current_biases = layer_forward$biases
@@ -584,7 +609,7 @@ optimizer_Adam = list(
     bias_gradients = layer_backward$dbiases
     
     #learning rate
-    currnt_learn_rate = learning_rate * (1 / (1 + decay*iteration)) 
+    currnt_learn_rate = learning_rate * (1 / (1 + lr_decay*iteration)) 
     
     #momentums
     #update momentums with current gradients and bias correct
@@ -621,12 +646,53 @@ optimizer_Adam = list(
            "weight_momentums" = weight_momentums, 
            "bias_momentums" = bias_momentums,
            "weight_cache" = weight_cache,
-           "bias_cache" = bias_cache)
+           "bias_cache" = bias_cache,
+           "n_neurons" = n_neurons)
 
 }##these are the updated params to be passed back into the layers
 )
+
+##function prints reminders for settings needed for each optimizer
+optimizer_REMINDME = function(optimizer = "sgd, adagrad, rmsprop, or adam"){
+  if(optimizer == "sgd"){
+    message("Momentum is optional, cache is not available. If you choose to set momentum rate in SGD arguments, set momentum = TRUE in parameter initialization function")
+  }
+  if(optimizer == "adagrad"){
+    message("Initialize parameters with cache=TRUE, momentum=FALSE. The AdaGrad optimizer implements cache - a rolling average/history of past gradients - as a form of adaptive gradients (or 'per-parameter learning rates'.")
+  }
+  if(optimizer == "rmsprop"){
+    message("Initialize parameters with cache=TRUE, momentum=FALSE. RMSProp implements cache like AdaGrad, but exponentially decays the cache. You will also have to set the 'rho' hyperparameter - the cache memory decay rate.")
+  }
+  if(optimizer == "adam"){
+    message("Initialize parameters with cache=TRUE & momentum=TRUE. To calculate parameter updates, Adam implements momentums in place of vanilla gradients and also applies cache to save a rolling average of the momentums.")
+  }
+  
+}
 # END NEURAL NET FUNCTIONS
 
+
+
+### Metrics ----
+metric_calc = function(output_layer, y_true,
+                       reg_loss = 0
+                       ){
+  ##Loss
+    DATA_LOSS = output_layer$loss
+    
+    REG_LOSS = reg_loss               ## = 0 if no regularization
+    TOTAL_LOSS = DATA_LOSS + REG_LOSS ## = data loss if no regularization
+      
+    
+ ##Predictions
+    PRED = max.col(output_layer$softmax_output, ties.method = "random")
+
+ ##Accuracy
+    ACC = mean(PRED == y_true, na.rm=T)
+    
+    list("data_loss"=DATA_LOSS, "regularization_loss"=REG_LOSS,
+         "total_loss"=TOTAL_LOSS, "accuracy"=ACC,
+         "predictions"=PRED)
+}
 
 ```
 
@@ -676,6 +742,96 @@ X_test = spiral_test[,c("x","y")]
 
 Test run to decide if i want to make any more changes to the fns
 
+
+```{r}
+
+X_train = as.matrix(X_train)
+
+optimizer_REMINDME("adam") ##see parameter settings needed for adam optimizer
+l1_params = init_params(n_inputs = ncol(X_train), 
+                        n_neurons = 128,
+                        momentum = TRUE, cache = TRUE)
+l2_params = init_params(n_inputs = 128,
+                        n_neurons = 64,
+                        momentum = TRUE, cache = TRUE)
+l3_params = init_params(n_inputs = 64,
+                            n_neurons = 3,
+                            momentum = TRUE, cache = TRUE)
+
+
+tot_epochs = 1000L
+for (epoch in 1:tot_epochs){
+
+#forward
+layer1 = layer_dense$forward(inputs = X_train,
+                             parameters = l1_params,
+                             weight_L2 = 5e-4, bias_L2 = 5e-4)
+  layer1_ReLU = activation_ReLU$forward(layer1)
+    layer1_dropout = layer_dropout$forward(layer1_ReLU, dropout_rate = 0.1)
+
+layer2 = layer_dense$forward(inputs = layer1_dropout$output,
+                             parameters = l2_params,
+                             weight_L2 = 5e-4, bias_L2 = 5e-4)
+  layer2_ReLU = activation_ReLU$forward(layer2)
+    layer2_dropout = layer_dropout$forward(layer2_ReLU, dropout_rate = 0.01)
+
+layer3 = layer_dense$forward(inputs = layer2_dropout$output,
+                             parameters = l3_params)
+  output = activation_loss_SoftmaxCrossEntropy$forward(layer3,
+                                                     y_true = spiral_test$label)
+    reg_loss = regularization_loss(layer1) + regularization_loss(layer2) +
+                          regularization_loss(layer3) #=0
+    metrics = metric_calc(output_layer = output,
+                          y_true = spiral_test$label,
+                          reg_loss = reg_loss)
+#backward
+  loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward(
+                  dvalues = output$softmax_output, y_true = spiral_train$label)
+l3_b = layer_dense$backward(d_layer = loss_softm_b, layer3)
+    l2_drop_b = layer_dropout$backward(d_layer = l3_b, layer2_dropout)  
+  l2_relu_b = activation_ReLU$backward(d_layer = l2_drop_b, layer2_ReLU)
+l2_b = layer_dense$backward(d_layer = l2_relu_b, layer2)
+    l1_drop_b = layer_dropout$backward(l2_b, layer1_dropout)
+  l1_relu_b = activation_ReLU$backward(l1_drop_b, layer1_ReLU)
+l1_b = layer_dense$backward(l1_relu_b, layer1)
+
+#optimize params
+l1_params = optimizer_Adam$update_params(layer_forward = layer1,
+                                         layer_backward = l1_b,
+                                         learning_rate = 0.001, 
+                                         lr_decay = 5e-7, iteration = epoch,
+                                         beta_1 = 0.5, beta_2 = 0.5)
+l2_params = optimizer_Adam$update_params(layer_forward = layer2,
+                                         layer_backward = l2_b,
+                                         learning_rate = 0.001,
+                                         lr_decay = 5e-7, iteration = epoch,
+                                         beta_1 = 0.5, beta_2 = 0.5)
+l3_params = optimizer_Adam$update_params(layer_forward = layer3,
+                                         layer_backward = l3_b,
+                                         learning_rate = 0.02,
+                                         lr_decay = 5e-7, iteration = epoch,
+                                         beta_1 = 0.5, beta_2 = 0.5)
+
+
+#status report
+  if (epoch == 1){print(c("epoch","err",
+                          "loss","data_loss",
+                          "acc", "lr"))}
+  if (epoch %in% seq(0,tot_epochs,by=100)){
+        print(c( epoch, 
+                 sum(is.nan(output$softmax_output)),#make sure NaN error is gone
+                 metrics$total_loss,
+                 metrics$data_loss,
+                 metrics$accuracy,
+                 l1_params$lr) )} #(include learn rate)
+
+
+#Save Final Metrics:
+  if (epoch==tot_epochs) return(metrics)
+
+}#end loop
+
+```
 
 
 
