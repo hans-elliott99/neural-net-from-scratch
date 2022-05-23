@@ -9,6 +9,8 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
+NOTE: currently, for multi-class, the classes would have to be encoded starting at 1, since code relies on index (R cols start at 1.)
+
 ## Full code
 In the last section, we worked on improving model generalization. In addition to testing our neural net's predictions on test data, we added L1 and L2 regularization and a dropout layer to our set of functions.  
 I've also cleaned up the functions a bit so things run smoother. Here's a list of the updates:   
@@ -308,7 +310,7 @@ activation_loss_SoftmaxCrossEntropy = list(
     #calculate loss
     loss = Categorical_CrossEntropy$forward(softmax_out, y_true)
     #function saves:
-    list("softmax_output"=softmax_out, "loss"=loss) 
+    list("output"=softmax_out, "loss"=loss) 
   },
   #BACKWARD PASS
   backward = function(dvalues, y_true){
@@ -668,35 +670,12 @@ optimizer_REMINDME = function(optimizer = "sgd, adagrad, rmsprop, or adam"){
   }
   
 }
-# END NEURAL NET FUNCTIONS
 
 
-
-### Metrics ----
-metric_calc = function(output_layer, y_true,
-                       reg_loss = 0
-                       ){
-  ##Loss
-    DATA_LOSS = output_layer$loss
-    
-    REG_LOSS = reg_loss               ## = 0 if no regularization
-    TOTAL_LOSS = DATA_LOSS + REG_LOSS ## = data loss if no regularization
-      
-    
- ##Predictions
-    PRED = max.col(output_layer$softmax_output, ties.method = "random")
-
- ##Accuracy
-    ACC = mean(PRED == y_true, na.rm=T)
-    
-    list("data_loss"=DATA_LOSS, "regularization_loss"=REG_LOSS,
-         "total_loss"=TOTAL_LOSS, "accuracy"=ACC,
-         "predictions"=PRED)
-}
 
 ```
 
-And here is our function to simulate the spiral data
+And here is our function to simulate the spiral data. 
 ```{r sim-data-fn}
 ## Creating Spiral Data
 #Source: https://cs231n.github.io/neural-networks-case-study/
@@ -719,33 +698,173 @@ for (j in (1:K)){
   }
 spiral_data = cbind(X,y)
 colnames(spiral_data) = c(colnames(X), 'label')
+spiral_data$label = spiral_data$label
 
 # Want randomly ordered labels?
-if (random_order==TRUE) {spiral_data$label = sample(1:3, size = N*K, 
+if (random_order==TRUE) {spiral_data$label = sample(1:(K), size = N*K, 
                                                     replace = TRUE)}
 return(spiral_data)
 }
 ```
 
 
+
+# Binary Logistic Regression
+We can start adding some new features to the neural net package, so that we can use it in different situations that multi-class classification.  
+For binary classificiation (2 classes), logistic regression is a common method, where we apply a sigmoid activation to the output layer.    
+
+The sigmoid function collapses its inputs into a range of outputs between 0 and 1, where 0 and 1 represent the 2 possible classes. It's outputs approach 0 and 1 exponetially fast. It will be simple to code since it is sigmoid =  1/(1 + e^-z) where e is Euler's number and z is the input value.  
+The derivative of the sigmoid function also solves quite simply to sigmoid*(1 - sigmoid), which will be easy to implement.  
+
+```{r activation-sigmoid}
+
+activation_Sigmoid = list(
+  forward = function(input_layer){
+    inputs = input_layer$output
+    sigmoid = 1 / (1 + exp(-inputs))
+    list("output" = sigmoid)
+},
+  backward = function(d_layer = "the layer object being passed back",
+                      sig_layer = "the sigmoid layer obj from the forward pass"
+                      ){
+    dvalues = d_layer$dinputs ##the values being passed back
+    output = sig_layer$output ##the output from the forward-pass
+    dinputs = dvalues * (1 - output) * output 
+    list("dinputs" = dinputs)
+  }
+)
+
+```
+
+
+
+# Binary Cross-Entropy Loss
+Now we will implement binary cross-entropy loss as our loss function. This will be similar to categorical cross-entropy, where we implemented -log() so that the lower the confidence of an output neuron (the lower the predicted probability for a given class), the higher the loss value will be. But instead of just calculating this on the target class, we sum the log-likelihoods of the correct & incorrect classes for each neuron. 
+```
+sample_losses = -(y_true * log(y_pred) + (1 - y_true) * log(1 - y_pred)
+```
+Where y_true is the correct class, and (1 - y_true) is the inccorect class, since the classes are simplified to 0 or 1.  
+
+Since we can have multiple output neurons each predicting which of the 2 classes the sample corresponds to, we might have a vector of loss values (one from each neuron) and so we can calculate the mean loss for each sample.  
+The derivative of this loss function simplifies to 
+```
+ [-(y_true / y_pred) - (1-y_true)/(1 - y_pred)] * (1/number_of_sigmoid_outputs)
+```
+As usual, check out the [NNFS](nnfs.io) book to see an excellent explanation of the math and intuition behind these formulas.  
+```{r binary-crossentropy}
+loss_BinaryCrossentropy = list(
+  forward = function(y_pred, y_true){
+    #clip data to prevent division by zero (both sides to keep mean unbiased)
+    y_pred_clipped = ifelse(y_pred >= 1-1e-7, 1-1e-7,
+                            ifelse(y_pred <= 1e-7, 1e-7, y_pred))
+    
+    #calculate sample-wise losse per neuron
+    sample_losses = -(y_true*log(y_pred_clipped) + 
+                                (1 - y_true)*log(1 - y_pred_clipped)
+                        )
+    #calculate total (mean) loss for each sample 
+    ## (mean across neurons/vector of outputs, neurons = cols, samples = rows)
+    sample_losses = rowMeans(sample_losses)
+    
+    #calculate mean loss across the entire batch
+    data_loss = mean(sample_losses)
+    
+    list("sample_losses" = sample_losses, "data_loss" = data_loss)
+  },
+  backward = function(dvalues = "sigmoid output", y_true){
+    
+    #number of samples
+    samples = nrow(dvalues)
+    #number of output neurons
+    n_outputs = ncol(dvalues)
+    
+    #clip data to prevent divide by zero
+    clipped_dvalues = ifelse(dvalues >= 1-1e-7, 1-1e-7,
+                            ifelse(dvalues <= 1e-7, 1e-7, dvalues))
+    #calculate gradients
+    dinputs = -(y_true / clipped_dvalues - 
+                  (1 - y_true) / (1 - clipped_dvalues)
+                  ) / n_outputs
+    
+    #normalize gradient
+    dinputs = dinputs/samples
+    ##We have to perform this normalization since each output returns its own
+    ##derivative, and without normalization, each additional input will increase
+    ##the gradients mechanically
+    list("dinputs" = dinputs)
+  }
+)    
+```
+
+Before we test this, I've also implemented a little metrics calculation function:
+
+```{r}
+### Metrics ----
+metric_calc = function(output_layer, loss_layer, y_true,
+                       reg_loss = 0, loss_fn = "categorical_crossentropy,
+                                                binary_crossentropy"
+                       ){
+  if(loss_fn == "categorical_crossentropy"){
+  ##Loss
+    DATA_LOSS = output_layer$loss
+    
+    REG_LOSS = reg_loss               ## = 0 if no regularization
+    TOTAL_LOSS = DATA_LOSS + REG_LOSS ## = data loss if no regularization
+      
+    
+ ##Predictions
+    PRED = max.col(output_layer$output, ties.method = "random")
+
+ ##Accuracy
+    ACC = mean(PRED == y_true, na.rm=T)
+    
+    list("data_loss"=DATA_LOSS, "regularization_loss"=REG_LOSS,
+         "total_loss"=TOTAL_LOSS, "accuracy"=ACC,
+         "predictions"=PRED)
+    
+  } else if(loss_fn == "binary_crossentropy"){
+    DATA_LOSS = loss_layer$data_loss
+    
+    REG_LOSS = reg_loss
+    TOTAL_LOSS = DATA_LOSS + REG_LOSS
+    
+  ##Predictions
+    PRED = (output_layer$output > 0.5) * 1
+            ##returns TRUE (1) if true, and FALSE (0) if false
+  ##Accuracy
+    ACC = mean(PRED == y_true, na.rm = T)
+    
+    list("data_loss"=DATA_LOSS, "regularization_loss"=REG_LOSS,
+         "total_loss"=TOTAL_LOSS, "accuracy" = ACC,
+         "predictions" = PRED)
+  }                    
+
+  
+}
+
+```
+
+
+Now I test the sigmoid activation function and binary crossentropy loss function. Note that (for each sample) we technically just need one neuron in the output layer, since the sigmoid function will (eventually) be predicting 0 or 1. But we will still leave 3 output neurons, giving each an opportunity to predict the label.  
+First sim the data with 2 classes instead of 3.
 ```{r sim-the-data}
 set.seed(2)
 #First Create Training Data
-spiral_train = sim_data_fn(N = 100, K = 3)
+spiral_train = sim_data_fn(N = 150, K = 2)
 X_train = spiral_train[,c("x","y")] ## leave out 'label'
 
 #Then Create Testing Data
-spiral_test = sim_data_fn(N = 100, K = 3)
+spiral_test = sim_data_fn(N = 150, K = 2)
 X_test = spiral_test[,c("x","y")] 
 
 ```
 
-Test run to decide if i want to make any more changes to the fns
-
-
-```{r}
+Now we run our training loop. As usual, the X features need to be in matrix form. **In addition, we need the true labels (y_true) to be a vector of 0s and 1s for our loss function to work correctly.**   
+In practice, we would need to encode our classes as 0 or 1, which wouldn't be difficult.  
+```{r training-loop}
 
 X_train = as.matrix(X_train)
+y_true_train = spiral_train$label - 1
 
 optimizer_REMINDME("adam") ##see parameter settings needed for adam optimizer
 l1_params = init_params(n_inputs = ncol(X_train), 
@@ -775,19 +894,34 @@ layer2 = layer_dense$forward(inputs = layer1_dropout$output,
   layer2_ReLU = activation_ReLU$forward(layer2)
     layer2_dropout = layer_dropout$forward(layer2_ReLU, dropout_rate = 0.01)
 
+##CHANGES:
 layer3 = layer_dense$forward(inputs = layer2_dropout$output,
                              parameters = l3_params)
-  output = activation_loss_SoftmaxCrossEntropy$forward(layer3,
-                                                     y_true = spiral_test$label)
+  ##OUTPUT LAYER:
+  layer3_Sigmoid = activation_Sigmoid$forward(layer3)
+  ##LOSS:  
+  loss = loss_BinaryCrossentropy$forward(y_pred = layer3_Sigmoid$output,
+                                         y_true = y_true_train)
+  
+  
     reg_loss = regularization_loss(layer1) + regularization_loss(layer2) +
                           regularization_loss(layer3) #=0
-    metrics = metric_calc(output_layer = output,
-                          y_true = spiral_test$label,
-                          reg_loss = reg_loss)
+    
+    metrics = metric_calc(output_layer = layer3_Sigmoid,
+                          loss_layer = loss,
+                          y_true = y_true_train,
+                          reg_loss = reg_loss,
+                          loss_fn = "binary_crossentropy")
 #backward
-  loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward(
-                  dvalues = output$softmax_output, y_true = spiral_train$label)
-l3_b = layer_dense$backward(d_layer = loss_softm_b, layer3)
+##CHANGES:
+    ##Backprop the Binary Crossentropy fn
+    loss_BCb = loss_BinaryCrossentropy$backward(dvalues =
+                                                    layer3_Sigmoid$output,
+                                                y_true = y_true_train)
+    ##Backprop the Sigmoid function
+  l3_Sig_b = activation_Sigmoid$backward(d_layer = loss_BCb,
+                                          sig_layer = layer3_Sigmoid) 
+l3_b = layer_dense$backward(d_layer = l3_Sig_b, layer3)
     l2_drop_b = layer_dropout$backward(d_layer = l3_b, layer2_dropout)  
   l2_relu_b = activation_ReLU$backward(d_layer = l2_drop_b, layer2_ReLU)
 l2_b = layer_dense$backward(d_layer = l2_relu_b, layer2)
@@ -814,24 +948,267 @@ l3_params = optimizer_Adam$update_params(layer_forward = layer3,
 
 
 #status report
-  if (epoch == 1){print(c("epoch","err",
-                          "loss","data_loss",
-                          "acc", "lr"))}
+  if (epoch == 1){print(c("epoch", "loss", "data_loss", "acc", "lr"))}
   if (epoch %in% seq(0,tot_epochs,by=100)){
-        print(c( epoch, 
-                 sum(is.nan(output$softmax_output)),#make sure NaN error is gone
+   report =   c( epoch, 
                  metrics$total_loss,
                  metrics$data_loss,
                  metrics$accuracy,
-                 l1_params$lr) )} #(include learn rate)
+                 l1_params$lr) 
+   report = sapply(report, round, 7)
+   print(report)} 
 
 
 #Save Final Metrics:
   if (epoch==tot_epochs) return(metrics)
 
-}#end loop
+} #end loop
 
 ```
+
+
+# Regression
+Let's also implement some new features so that our neural net can perform regression tasks in addition to classification.  
+We will need:
+- a new activation function for the output layer (a "linear" activation fn)  
+- a new loss function (we will implement both MSE and MAE)  
+- and we'll have to implement backpropagation
+
+
+## Linear Activation Function
+This is quite simple - since we want to predict an actual value, as opposed to a class or label, we are not going to modify the inputs at all. For the backwards step, the derivative is also quite simple. Since the linear function is essentially y = x, the derivative is 1. Due to the chain rule, this will be 1 * dvalues, where dvalues are the derivative values being passed back from next layer.  
+
+```{r linear-activation}
+
+activation_Linear = list(
+  forward = function(input_layer){
+    output = input_layer$output
+    list("output" = output)
+  },
+  
+  backward = function(d_layer){
+    dinputs = d_layer$dinputs
+    list("dinputs" = dinputs)
+    #derivative = 1, so 1 * dvalues = dvalues. dvalues correspond to the 
+    #previously backpropagated layer's dinputs
+    }
+)
+
+```
+
+## L2 Loss: Mean Squared Error (MSE) Loss
+A common loss metric used in regression tasks, to calculate MSE we square the differences between the y_true's and y_pred's, and take the mean of the values. **Squaring the difference ideally leads to a harsher penalty for bigger misses.**    
+The derivative simplifies to (-2/J) * (y_true-y_pred), where J = the number of outputs. We also divide by the number of samples to normalize the gradients so that they are not dependent on the size of a batch.   
+
+```{r MSE}
+loss_MeanSquaredError = list(
+  forward = function(y_pred, y_true){
+    ##calculate MSE for each sample (row)
+    sample_losses = rowMeans( (y_true - y_pred)^2 )
+      list("sample_losses" = sample_losses, "y_true" = y_true)
+  },
+  backward = function(dvalues = "linear activation fn output",
+                      loss_layer = "loss layer object from forward pass"){
+    
+    y_true = loss_layer$y_true
+    #number of samples
+    samples = nrow(dvalues)
+    #number of output neurons
+    n_outputs = ncol(dvalues)
+    
+    #Gradient on values (dvalues = y_pred)
+    dinputs = -2 * (y_true - dvalues) / n_outputs 
+    
+    #Normalize
+    dinputs = dinputs / samples
+    
+    list("dinputs"=dinputs)
+  }
+)
+```
+
+
+## L1 Loss: Mean Absolute Error (MAE) Loss
+MAE is similair to MSE except we take the absolute value of the differences between the y_true's and the y_pred's (instead of squaring them), and then take the mean value.  
+**Taking the absolute value of the difference ideally leads to equal penalties for all missess.**  
+The derivative simplifies to (1/J) * {1, if y_true - y_pred > 0 | -1, if y_true - y_pred < 0} (this follows from the derivative of an absolute value). Again, we normalize the gradients by dividing by the number of samples.
+
+```{r MAE}
+loss_MeanAbsoluteError = list(
+  forward = function(y_pred, y_true){
+    ##calculate MAE for each sample (row)
+    sample_losses = rowMeans( abs(y_true - y_pred) )
+      list("sample_losses" = sample_losses, "y_true" = y_true)
+},
+  backward = function(dvalues = "linear activation fn output",
+                      loss_layer = "loss layer object from forward pass"){
+    y_true = loss_layer$y_true
+    #number of samples
+    samples = nrow(dvalues)
+    #number of output neurons
+    n_outputs = ncol(dvalues)
+    
+    #calculate gradient (sign returns 1 for values >0, -1 for values <0)
+    dinputs = sign(y_true - dvalues) / n_outputs
+                            ##dvalues = y_pred
+    #normalize gradients
+    dinputs = dinputs / samples
+    
+    list("dinputs"=dinputs)
+  }
+)
+```
+
+
+## Regression Problem & Training
+Let's test the regression capabilities of our code. First, we'll need some new data that is fitting for a regression task. We'll copy a simple and classic regression task, which is to fit a neural net to a sine wave. 
+
+```{r sine-wave}
+##Create sine-wave datset
+x  = seq(0, 2*pi, length.out = 100) 
+sine_data = data.frame(x = x/max(x), ##normalized
+                       y = sin(x))
+
+##shuffle
+sine_data = sine_data[sample(1:nrow(sine_data)), ]
+
+plot(sine_data)
+
+```
+
+
+```{r}
+X = as.matrix(sine_data$x)
+
+  optimizer_REMINDME("adam") ##see parameter settings needed for adam optimizer
+  l1_params = init_params(n_inputs = ncol(X), ##just 1 input 
+                          n_neurons = 64,
+                          momentum = TRUE, cache = TRUE)
+  l2_params = init_params(n_inputs = 64,
+                          n_neurons = 64,
+                          momentum = TRUE, cache = TRUE)
+  l3_params = init_params(n_inputs = 64,
+                          n_neurons = 1, ##just one output value per sample
+                          momentum = TRUE, cache = TRUE)
+
+
+tot_epochs = 5000L
+for (epoch in 1:tot_epochs){
+#forward
+layer1 = layer_dense$forward(inputs = X, parameters = l1_params)
+  layer1_ReLU = activation_ReLU$forward(layer1)
+layer2 = layer_dense$forward(inputs = layer1_ReLU$output, 
+                             parameters = l2_params)
+  layer2_ReLU = activation_ReLU$forward(layer2)
+layer3 = layer_dense$forward(inputs = layer2_ReLU$output,
+                             parameters = l3_params)
+  ##OUTPUT LAYER: [CHANGES]
+  layer3_linear = activation_Linear$forward(layer3)
+
+  ##LOSS:  
+  loss_mse = loss_MeanSquaredError$forward(y_pred = layer3_linear$output,
+                                           y_true = sine_data$y)
+  ##(also report MAE, even though MSE is used for optimization)
+  loss_mae = loss_MeanAbsoluteError$forward(y_pred = layer3_linear$output,
+                                            y_true = sine_data$y)
+    
+#backward [CHANGES]
+    ##Backprop the MSE loss fn
+    loss_b = loss_MeanSquaredError$backward(dvalues = layer3_linear$output,
+                                            loss_layer = loss_mse) 
+    ##Backprop the Linear activation function
+  l3_Lin_b = activation_Linear$backward(d_layer = loss_b) 
+    ##Backprop the dense layers & the ReLU fns 
+l3_b = layer_dense$backward(d_layer = l3_Lin_b, layer3)
+  l2_relu_b = activation_ReLU$backward(d_layer = l3_b, layer2_ReLU)
+l2_b = layer_dense$backward(d_layer = l2_relu_b, layer2)
+  l1_relu_b = activation_ReLU$backward(l2_b, layer1_ReLU)
+l1_b = layer_dense$backward(l1_relu_b, layer1)
+
+
+  learn_r = 0.005
+  lrdecay = 1e-3
+  beta1 = 0.2
+  beta2 = 0.2
+#optimize params
+l1_params = optimizer_Adam$update_params(layer_forward = layer1,
+                                         layer_backward = l1_b,
+                                         learning_rate = learn_r, 
+                                         lr_decay = lrdecay, iteration = epoch,
+                                         beta_1 = beta1, beta_2 = beta2)
+l2_params = optimizer_Adam$update_params(layer_forward = layer2,
+                                         layer_backward = l2_b,
+                                         learning_rate = learn_r,
+                                         lr_decay = lrdecay, iteration = epoch,
+                                         beta_1 = beta1, beta_2 = beta2)
+l3_params = optimizer_Adam$update_params(layer_forward = layer3,
+                                         layer_backward = l3_b,
+                                         learning_rate = learn_r,
+                                         lr_decay = lrdecay, iteration = epoch,
+                                         beta_1 = beta1, beta_2 = beta2)
+
+
+#status report
+  if (epoch == 1){
+    print(c("epoch", "MSE loss", "MAE", "lr"))
+    report_history = data.frame()
+    }
+  if (epoch %in% seq(0,tot_epochs,by=100)){
+   report =   c( epoch, 
+                 mean(loss_mse$sample_losses),
+                 mean(loss_mae$sample_losses),
+                 l1_params$lr) 
+   report = sapply(report, round, 7)
+   print(report)
+   report_history = rbind(report_history, report)
+   } 
+
+
+#Periodically save the predicted values
+  if (epoch == 1) reg_predictions = data.frame(row = 1:nrow(sine_data))
+  if (epoch %in% c(10, 100, 1000, 2000)){
+    i_pred = data.frame(layer3_linear$output)
+    colnames(i_pred) = paste0("epoch_",epoch)
+    reg_predictions = cbind(reg_predictions, i_pred)
+  }  
+
+
+} #end loop
+
+```
+
+After I tweaked with the model's hyperparameters extensively, it was able to learn the sine wave function. (Key to this process was dropping the beta_1 and beta_2 values quite low... otherwise the model was hardly updating its parameters.)  
+Below we can see the progress of the model over the epochs.
+```{r}
+##Plot model fit history
+plot_x = sine_data$x
+par(mfrow = c(3,3))
+  plot(sine_data$x, reg_predictions$epoch_10, 
+       main = "10 Epochs", ylab="y", xlab="X")
+  plot(sine_data$x, reg_predictions$epoch_100, 
+       main = "100 Epochs", ylab="y", xlab="X")
+  plot(sine_data$x, reg_predictions$epoch_1000, 
+       main = "1000 Epochs", ylab="y", xlab="X")
+  plot(sine_data$x, reg_predictions$epoch_2000, 
+       main = "2000 Epochs", ylab="y", xlab="X")
+  plot(sine_data$x, layer3_linear$output, 
+       main = "Final: 5000 Epochs", ylab="y", xlab="X")
+
+```
+
+```{r}
+##Plot model loss
+colnames(report_history) = c("epoch", "MSE", "MAE", "lr")
+
+plot(report_history$epoch, report_history$MSE, type = "l", col = "red")
+lines(report_history$epoch, report_history$MAE, type = "l", col = "blue")
+legend(8000, 0.08, legend = c("MSE","MAE"), 
+       col = c("red","blue"), lty = c(1,1,1),
+       ncol = 1)
+```
+
+
+
 
 
 

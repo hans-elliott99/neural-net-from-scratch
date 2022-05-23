@@ -550,6 +550,8 @@ X_train = spiral_train[,c("x","y")] ## leave out 'label'
 spiral_test = sim_data_fn(N = 100, K = 3)
 X_test = spiral_test[,c("x","y")] 
 
+#spiral_train$label = spiral_train$label - 1
+#spiral_test$label = spiral_test$label - 1
 ```
 
 ```{r}
