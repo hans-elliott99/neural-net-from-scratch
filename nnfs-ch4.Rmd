@@ -14,8 +14,8 @@ NOTE: currently, for multi-class, the classes would have to be encoded starting 
 ## Full code
 In the last section, we worked on improving model generalization. In addition to testing our neural net's predictions on test data, we added L1 and L2 regularization and a dropout layer to our set of functions.  
 I've also cleaned up the functions a bit so things run smoother. Here's a list of the updates:   
-- Overall, my changes are a move towards a new system which I think will be easy to implement and will reduce the amount of overhead needed to actually use the functions. Basically, the heart of the process will be the layer objects that get created for each hidden and output layer. The layer objects are full of other objects which they can pass on to the various other functions as needed. That way, all we really have to do is pass on one layer into the next, and the only other arguments we need to specify are hyperparameters.  
-- The `init_params` function will save the n_neurons in addition to all of the parameters since it was redundant to include n_neurons as an argument in both the initialization function and the `layer_dense` function. The `layer_dense` function is updated to extract the n_neurons object from the parameters object.
+- Overall, my changes are a move towards a new system which I think will be easy to implement and will reduce the amount of overhead needed to actually use the functions. Basically, the heart of the process will be the layer objects that get created for each hidden and output layer. The layer objects are stocked full of other objects which they can pass on to the various other functions as needed. That way, all we really have to do is pass on one layer into the next, and the only other arguments we need to specify are hyperparameters.   
+- The `init_params` function will save the n_neurons in addition to all of the parameters since it was redundant to include n_neurons as an argument in both the initialization function and the `layer_dense` function. The `layer_dense` function is updated to extract the n_neurons object from the parameters object.  
 - Since the init_params fns defines the number of neurons, we will need the optimized paramaters object at the end of backpropagation to also contain a n_neurons object, so that when the forward pass begins again the layer_dense function can find it. This is fairly simple since we are already passing the forward layer object to the optimizer function, and thus it can extract the number of neurons from the forward layer's output matrix - the number of columns in the output matrix corresponds to the number of neurons.  
 - There was some redundancy with the backprop step, where I was specifying "dvalues" as the derivative values being passed back from the next layer into the current layer. I simplify this so that all we have to do is pass back that next layer object (slightly confusing - this is backprop layer corresponding to the forward-pass layer that is the next layer in the forward pass, so technically it is the previous layer in the backprop). I'm calling this argument `d_layer.` The idea is that you just pass back each backpropagated layer sequentially. Thus every backpropagation step takes two simple arguments: the forward pass layer object, and the backward pass layer object of the "next" layer. This works fairly well except
 
@@ -56,7 +56,7 @@ init_params = function(n_inputs = "# of features",
                "weight_momentums"=weight_momentums,
                "bias_momentums"=bias_momentums,
                "n_neurons"=n_neurons)
-    } else if (cache == TRUE & momentum == FALSE){ ##cache only
+    
           list("weights"=weights,"biases"=biases,
                "weight_cache"=weight_cache,
                "bias_cache"=bias_cache,
@@ -1206,6 +1206,451 @@ legend(8000, 0.08, legend = c("MSE","MAE"),
        col = c("red","blue"), lty = c(1,1,1),
        ncol = 1)
 ```
+
+## A Note on Weight Initializtion
+A point mentioned in [NNFS](https://nnfs.io/) Chapter 17 is that the way weights are randomly initialized can actually have a significant impact on how well a model learns. As a reminder, we randomly initialize the weights as so:
+```
+weights = matrix(data = (0.1 * rnorm(n = n_inputs*n_neurons)),
+                             nrow = n_inputs, ncol = n_neurons)
+```
+We multiply the weights by a fraction (I chose 0.1) to keep them small, but this number is arbitrarily chosen. In Chapter 17, the authors achieve substantial learning improvements by changing this number.  
+In the popular ML library/API Keras, [the initialization of weights and biases can be customized using several built in initializer options](https://keras.io/api/layers/initializers/).  
+
+It might be worth coding some of these up in the future.  
+
+
+# A Model Object
+In this section, we define a function and workflow to convert that (admittedly messy) training loop into a cleaner, automated function.
+
+```{r}
+## This might not be worth doing 
+train = list(
+  initalize = function(n_layers = NULL){
+    # Create an empty list for network objects
+    
+    ##if # of layers is predefined, pre-allocate the vector
+    ##this is faster than the simple empty list
+    # if (!is.null(n_layers)){
+    #   layer_list = vector(mode = "list", length = n_layers)
+    # } else layer_list = list()
+    model = list()
+    return(model)
+  },
+  add_dense = function(model, n_inputs, n_neurons, dropout_rate = 0,
+                       weight_L1=0, weight_L2=0, bias_L1=0, bias_L2=0){
+    pos = length(model) + 1 ##the layer's position in sequence of layers
+    
+    dense_args = list(n_inputs=n_inputs, n_neurons=n_neurons,
+                        dropout_rate = dropout_rate,
+                        weight_L1=weight_L1, weight_L2=weight_L2,
+                        bias_L1=bias_L1, bias_L2=bias_L2,
+                        class = "layer_dense", pos = pos)
+    
+    #layer_n = length(model) + 1 ##determine the layer's sequence number
+    #layer_name = deparse(substitute(layer)) ##extract string with layer name
+    
+    # Add layer objects to the model
+    model = c(model, "layer" = list(dense_args))
+    # Give the layer a unique name corresponding to position in sequence
+    names(model)[[pos]] = paste0("layer", pos)
+    #names(model)[['new']] = layer_name ##rename the layer object appropriately
+    return(model)
+    
+  },
+  # add_dropout = function(model, dropout_rate=0){
+  #   pos = length(model) + 1
+  #   base_layer = length(model) ##the dense layer that this layer is tied to
+  #   dropout_args = list(dropout_rate=dropout_rate,
+  #                       class = "layer_dropout", 
+  #                       pos = pos, base_layer = base_layer)
+  #   
+  #   model = c(model, "layer" = list(dropout_args))
+  #   names(model)[[pos]] = paste0("layer",pos)
+  #   
+  #   return(model)
+  #},
+  add_activation =  function(model, activ_fn = c("linear", "relu", "sigmoid",
+                                   "softmax_crossent")){
+    class = activ_fn
+    pos = length(model) + 1
+    ##We want to tie the activation function back to the dense layer 
+    ##its applied upon. This depends on if dropout was used in between
+   # prior_layer = paste0("layer", length(model)-1)
+   #if (model[[paste0(prior_layer)]]$class == "layer_dropout"){
+   #    base_layer = length(model) - 2
+   #  } else base_layer = length(model) - 1
+    base_layer = pos-1
+    activ_args = list(class=class, pos=pos, base_layer=base_layer)
+    model = c(model, "layer" = list(activ_args))
+    names(model)[[pos]] = paste0("layer",pos)
+    
+    return(model)
+  },
+  add_loss = function(model, loss_fn=c("binary_crossent", "mae", "mse")){
+    
+    pos = length(model) + 1
+    loss_args = list(class=loss_fn, pos=pos)
+    model = c(model, "layer" = list(loss_args))
+    names(model)[[pos]] = paste0("layer",pos)
+    
+    return(model)
+  }
+  # add_optimizer = function(model, optimizer = c("adam"),
+  #                          learning_rate, lr_decay, epsilon){
+  #   pos = length(model) + 1
+  #   opt_args = list(class=optimizer, learning_rate=learning_rate,
+  #                   lr_decay=lr_decay, epsilon=epsilon)
+  #   model = c(model, "layer" = list(opt_args))
+  #   names(model)[[pos]] = paste0("layer",pos)
+  # }
+)
+```
+
+
+```{r}
+compile = function(model, inputs, y_true, epochs,
+                   optimizer = c("adam"), 
+                   learning_rate=0, lr_decay=0, epsilon=1e-7,...){
+  
+  optim_args = list(...)
+
+  ##How many unique "base layers" (dense layers)  
+  baselayers = c()
+  for (i in seq_along(model)){
+    base_i = model[[i]]$base_layer
+    baselayers = c(baselayers, base_i)
+  }
+  baselayers = unique(baselayers) ##return vector of each baselayer position
+  
+  # Set up the layer parameters
+  layer_parameters = list() 
+    ##reset this list every time to overwrite the past params
+  
+  # Initialize random params for every layer
+  ## First need to derive param settings from the chosen optimizer
+  if (optimizer=="adam"){
+    cache_set=TRUE
+    momentum_set=TRUE
+  } else if (optimizer=="sgd"){
+    if (optim_args$momentum==TRUE) momentum_set=TRUE else momentum_set=FALSE
+    cache_set=FALSE
+  }
+  
+  for (b in baselayers){
+    current_layer = paste0("layer", b)
+    n_inputs = model[[current_layer]]$n_inputs
+    
+    random_params = init_params(n_inputs = model[[current_layer]]$n_inputs,
+                                n_neurons = model[[current_layer]]$n_neurons,
+                                momentum = momentum_set, 
+                                cache = cache_set)
+    lb_params = (random_params)
+
+    layer_parameters = c(layer_parameters, "layer" = list(lb_params))
+    names(layer_parameters)[[length(layer_parameters)]] = paste0("layer",b)
+  }
+  
+for (epoch in 1:epochs){
+  
+  layers = list()
+  # Forward Pass
+  ##First layer
+  dense1 = layer_dense$forward(inputs = inputs,
+                              parameters = layer_parameters[[1]], ##the randoms
+                              weight_L1 = model[[1]]$weight_L1,
+                              weight_L2 = model[[1]]$weight_L2,
+                              bias_L1 = model[[1]]$bias_L1,
+                              bias_L2 = model[[1]]$bias_L2
+                              )
+  dropout1 = layer_dropout$forward(input_layer = dense1,
+                                  dropout_rate = model[[1]]$dropout_rate)
+    
+  activ_fn1 = model[[2]]$class
+  activ1 = activation_Linear$forward(input_layer = dropout1)
+  output1 = activ1
+  
+  layer1 = list(dense=dense1,dropout=dropout1, activ=activ1, output=output1)
+  layers = c(layers, "layer1" = list(layer1))
+  
+  ## Next Layers
+  for (b in 1:length(baselayers[-1])){##for all other base layers
+    
+    prior_baselayer = baselayers[b] ##index of prior baselayer (includ. 1st)
+    input_layer = paste0("layer",prior_baselayer)
+    current_layer = paste0("layer",baselayers[b+1])
+    
+    dense_b = layer_dense$forward(inputs = layers[[input_layer]]$dense$output,
+                                parameters = layer_parameters[[current_layer]],
+                                weight_L1 = model[[current_layer]]$weight_L1,
+                                weight_L2 = model[[current_layer]]$weight_L2,
+                                bias_L1 = model[[current_layer]]$bias_L1,
+                                bias_L2 = model[[current_layer]]$bias_L2
+                                )
+    dropout_b = layer_dropout$forward(input_layer = dense_b,
+                            dropout_rate = model[[current_layer]]$dropout_rate)
+    
+    #activ_fn = model[[paste0("layer",b+2)]]$class ##not working
+      ##current layer+1 since activation follows dense. current is already b+1
+    activ_b = activation_Linear$forward(input_layer = dropout_b)
+    output_b = activ_b
+    
+    layer = list(dense=dense_b,dropout=dropout_b,activ=activ_b,output=output_b)
+    layers = c(layers, "layer" = list(layer))
+    names(layers)[[length(layers)]] = paste0("layer",current_layer)
+  }
+  
+  ## Calculate Loss
+  loss_fn = model[[length(model)]]$class ##last layer should be a loss layer
+  
+  loss_mse = loss_MeanSquaredError$forward(
+    y_pred = layers[[length(layers)]]$output,
+    y_true = y_true
+    )
+  
+  ## Calculate any other metrics
+  loss_mae = loss_MeanAbsoluteError$forward(
+    y_pred = layers[[length(layers)]]$output$output,
+    y_true = y_true
+    )
+  
+  layers_back = list()
+  # Backward Pass
+  ## First Backprop Layer (which is the last layer in the training sequence)
+  ###First backprop the loss function
+  loss_backprop1 = loss_MeanSquaredError$backward(
+    dvalues = layers[[length(layers)]]$output$output,
+    loss_layer = loss_mse
+    )
+  ###Then backprop the activation function
+  activ_backprop1 = activation_Linear$backward(d_layer = loss_backprop1)
+  ###Then backprop the dropour layer, IF dropout was used
+  if (model[[baselayers[length(baselayer)]]]$dropout_rate == 0){
+    dropout1 == FALSE 
+    } else dropout1 == TRUE
+  
+  if (dropout1 == TRUE){ ##backprop dropout layer only if needed
+    dropout_backprop1 = layer_dropout$backward(
+      d_layer = activ_backprop1, 
+      layer_dropout = layers[[length(layers)]]$dropout
+      )
+  }
+  
+  if (dropout1==TRUE){ d_layer_dense1=dropout_backprop1
+  } else d_layer_dense1=activ_backprop1
+  
+  ###Finally, backprop the dense layer
+  dense_backprop1 = layer_dense$backward(d_layer = d_layer_dense1,
+                                        layer = layers[[length(layers)]]$dense)
+  
+  layer_b = list(dense_backprop=dense_backprop1)
+  layers_back = c(layers_back, "layer_last" = list(layer_b))
+  
+  
+  ## Next Layers
+  for (b in baselayers[-length(baselayers)]){ ##for all layers but the last
+    current_layer = paste0("layer", b)
+    
+    activ_backprop = activation_Linear$backward(d_layer = dense_backprop)
+    
+    if (model[[baselayers[b]]]$dropout_rate == 0){
+    dropout_b == FALSE 
+    } else dropout_b == TRUE
+    
+   if (dropout_b == TRUE){ ##backprop dropout layer only if needed
+    dropout_backprop = layer_dropout$backward(
+      d_layer = activ_backprop, 
+      layer_dropout = layers[[current_layer]]$dropout
+      )
+    d_layer_dense_b=dropout_backprop
+    } else d_layer_dense_b=activ_backprop
+    
+    dense_backprop = layer_dense$backward(d_layer = d_layer_dense_b,
+                                      layer = layers[[current_layer]]$dense)
+    layer_b = list(dense_backprop=dense_backprop)
+    layers_back = c(layers_back, "layer" = list(layer_b))
+    names(layers_back)[[length(layers_back)]] = paste0("layer",b)
+  }
+  
+  # Optimize the Parameters
+  for (b in baselayers){
+    current_layer = paste0("layer", b)
+    optimal_params_b = optimizer_Adam$update_params(
+                        layer_forward = layers[[current_layer]]$dense,
+                        layer_backward = layers_back[[current_layer]],
+                        learning_rate = optim_args$learning_rate,
+                        lr_decay = optim_args$lr_decay, iteration = epoch,
+                        epsilon = optim_args$epsilon,
+                        beta_1 = optim_args$beta_1,
+                        beta_2 = optim_args$beta_2
+                        )
+                      
+    optim_b = list(optimal_params_b)
+    layer_parameters = c(layer_parameters, "layer" = list(optim_b))
+    names(layer_parameters)[[length(layer_parameters)]] = paste0("layer",b)
+  }
+  
+  
+  ## Status Reports
+  if (epoch == 1){
+    print(c("epoch", "MSE loss", "MAE", "lr"))
+    #report_history = data.frame()
+    }
+  if (epoch %in% seq(0,tot_epochs,by=100)){
+   report =   c( epoch, 
+                 mean(loss_mse$sample_losses),
+                 mean(loss_mae$sample_losses),
+                 layer_parameters[["layer1"]]$lr) 
+   report = sapply(report, round, 7)
+   print(report)
+   #report_history = rbind(report_history, report)
+   } 
+}##end loop
+  
+}
+
+
+```
+
+
+
+```{r}
+##Create sine-wave datset
+x  = seq(0, 2*pi, length.out = 100) 
+sine_data = data.frame(x = x/max(x), ##normalized
+                       y = sin(x))
+sine_data = sine_data[sample(1:nrow(sine_data)), ] ##shuffle
+
+X = as.matrix(sine_data$x)
+
+model = train$initalize()
+model = train$add_dense(model, n_inputs = 1, n_neurons = 128, 
+                        dropout_rate = 0)
+model = train$add_activation(model, activ_fn = "linear")
+model = train$add_dense(model, n_inputs = 128, n_neurons = 64,
+                        dropout_rate = 0)
+model = train$add_activation(model, activ_fn = "linear")
+model = train$add_loss(model, loss_fn = "mse")
+
+options(error=recover); debug(compile)
+compile(model, inputs = X, y_true = y, epochs = 200,
+        optimizer = "adam", learning_rate = 0.01, lr_decay = 1e-3,
+        epsilon = 1e-7)
+
+
+```
+
+
+
+
+```{r}
+##for reference
+X = as.matrix(sine_data$x)
+
+  optimizer_REMINDME("adam") ##see parameter settings needed for adam optimizer
+  l1_params = init_params(n_inputs = ncol(X), ##just 1 input 
+                          n_neurons = 64,
+                          momentum = TRUE, cache = TRUE)
+  l2_params = init_params(n_inputs = 64,
+                          n_neurons = 64,
+                          momentum = TRUE, cache = TRUE)
+  l3_params = init_params(n_inputs = 64,
+                          n_neurons = 1, ##just one output value per sample
+                          momentum = TRUE, cache = TRUE)
+
+
+tot_epochs = 5000L
+#for (epoch in 1:tot_epochs){
+#forward
+layer1 = layer_dense$forward(inputs = X, parameters = l1_params)
+  layer1_ReLU = activation_ReLU$forward(layer1)
+layer2 = layer_dense$forward(inputs = layer1_ReLU$output, 
+                             parameters = l2_params)
+  layer2_ReLU = activation_ReLU$forward(layer2)
+layer3 = layer_dense$forward(inputs = layer2_ReLU$output,
+                             parameters = l3_params)
+  ##OUTPUT LAYER: [CHANGES]
+  layer3_linear = activation_Linear$forward(layer3)
+
+  ##LOSS:  
+  loss_mse = loss_MeanSquaredError$forward(y_pred = layer3_linear$output,
+                                           y_true = sine_data$y)
+  ##(also report MAE, even though MSE is used for optimization)
+  loss_mae = loss_MeanAbsoluteError$forward(y_pred = layer3_linear$output,
+                                            y_true = sine_data$y)
+    
+#backward [CHANGES]
+    ##Backprop the MSE loss fn
+    loss_b = loss_MeanSquaredError$backward(dvalues = layer3_linear$output,
+                                            loss_layer = loss_mse) 
+    ##Backprop the Linear activation function
+  l3_Lin_b = activation_Linear$backward(d_layer = loss_b) 
+    ##Backprop the dense layers & the ReLU fns 
+l3_b = layer_dense$backward(d_layer = l3_Lin_b, layer3)
+  l2_relu_b = activation_ReLU$backward(d_layer = l3_b, layer2_ReLU)
+l2_b = layer_dense$backward(d_layer = l2_relu_b, layer2)
+  l1_relu_b = activation_ReLU$backward(l2_b, layer1_ReLU)
+l1_b = layer_dense$backward(l1_relu_b, layer1)
+
+
+  learn_r = 0.005
+  lrdecay = 1e-3
+  beta1 = 0.2
+  beta2 = 0.2
+#optimize params
+l1_params = optimizer_Adam$update_params(layer_forward = layer1,
+                                         layer_backward = l1_b,
+                                         learning_rate = learn_r, 
+                                         lr_decay = lrdecay, iteration = epoch,
+                                         beta_1 = beta1, beta_2 = beta2)
+l2_params = optimizer_Adam$update_params(layer_forward = layer2,
+                                         layer_backward = l2_b,
+                                         learning_rate = learn_r,
+                                         lr_decay = lrdecay, iteration = epoch,
+                                         beta_1 = beta1, beta_2 = beta2)
+l3_params = optimizer_Adam$update_params(layer_forward = layer3,
+                                         layer_backward = l3_b,
+                                         learning_rate = learn_r,
+                                         lr_decay = lrdecay, iteration = epoch,
+                                         beta_1 = beta1, beta_2 = beta2)
+
+
+#status report
+  if (epoch == 1){
+    print(c("epoch", "MSE loss", "MAE", "lr"))
+    report_history = data.frame()
+    }
+  if (epoch %in% seq(0,tot_epochs,by=100)){
+   report =   c( epoch, 
+                 mean(loss_mse$sample_losses),
+                 mean(loss_mae$sample_losses),
+                 l1_params$lr) 
+   report = sapply(report, round, 7)
+   print(report)
+   report_history = rbind(report_history, report)
+   } 
+
+
+#Periodically save the predicted values
+  if (epoch == 1) reg_predictions = data.frame(row = 1:nrow(sine_data))
+  if (epoch %in% c(10, 100, 1000, 2000)){
+    i_pred = data.frame(layer3_linear$output)
+    colnames(i_pred) = paste0("epoch_",epoch)
+    reg_predictions = cbind(reg_predictions, i_pred)
+  }  
+
+
+} #end loop
+
+```
+
+
+
+
+
+if exists l1_params, l1_params=l1_params
+else l1_params = init_params()
+
+
 
 
 
