@@ -214,8 +214,8 @@ Categorical_CrossEntropy = list(
                   )
                     
     #CALC LOSS FOR EACH SAMPLE (ROW)
-    neg_log_likelihoods = -log(confidences)
-    return(neg_log_likelihoods)
+    sample_losses = -log(confidences)
+    return(sample_losses)
     
   },
   #BACKWARD PASS
