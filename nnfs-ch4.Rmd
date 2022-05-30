@@ -1311,7 +1311,10 @@ add_loss = function(model,
 train_model = function(model, inputs, y_true, epochs,
                        optimizer = c("adam"), 
                        learning_rate=0, lr_decay=0, epsilon=1e-7,...,
-                       metric_list=NULL, print_every=100){
+                       metric_list=NULL, 
+                       validation_X=NULL, validation_y=NULL,
+                       batch_size=NULL,
+                       print_every=100){
   
   optim_args = list(...)
   if (!is.null(metric_list)){
@@ -1391,10 +1394,52 @@ train_model = function(model, inputs, y_true, epochs,
     #names(layer_parameters)[[length(layer_parameters)]] = paste0("layer",b)
   }
   
+  # Batch size
+  if (!is.null(batch_size)){
+    ##determine how many training "steps" will be needed 
+    train_steps = ncol(inputs) %/% batch_size	 #(integer division)
+    
+    ##Since integer division rounds down, there may be some remaining samples
+    ##not in a full batch. So we add 1 to include this last mini-batch
+    if (train_steps*batch_size < ncol(inputs)){
+      train_steps = train_steps + 1
+    }
+    # Now we repeat this process for the validation data
+    if (!is.null(validation_X)){
+      validation_steps = ncol(validation_X) %/% batch_size
+      if(validation_steps*batch_size < ncol(validation_X)){
+        validation_steps = validation_steps + 1
+      }
+    }
+  }
+  
+  
 for (epoch in 1:epochs){
   
-  layers = list()
+  step_loss = c()
+  
+  
+ for(step in 1:train_steps){
+  #Deal with batches:
+   ##if no batch_size given, then train using one step and full dataset
+   if (is.null(batch_size)){
+     batch_X = inputs
+     batch_y = y_true
+     
+   ##otherwise slice a batch
+   } else { 
+     if (step != train_steps){
+       batch_X = inputs[(step-1)*batch_size:step*batch_size, ]
+       batch_y = y_true[(step-1)*batch_size:step*batch_size, ]
+     } else {
+       ##for the last step, need to index precisely to the last row
+       batch_X = inputs[(step-1)*batch_size:ncol(inputs), ]
+       batch_y = y_true[(step-1)*batch_size:ncol(inputs), ]
+     }
+   }
+   
   # Forward Pass----
+  layers = list() ##container to store layer objects, resets every step/epoch
   ##First layer
   dense1 = layer_dense$forward(inputs = inputs,
                               parameters = layer_parameters[[1]], ##the randoms
@@ -1720,7 +1765,23 @@ if (length(baselayers) > 1){
     #names(layer_parameters)[[length(layer_parameters)]] = paste0("layer",b)
   }
   
+  ## Validation Data ----
+  ###Utilize the test_model() fn to test on validation data, if provided
+  current_fit = list("parameters" = layer_parameters)
   
+  if (!is.null(validation_X)){
+    if (is.null(validation_y)){
+      warning("provide both validation_X and validation_y")
+    } else{
+    validation = test_model(model = model,
+                            trained_model = current_fit,
+                            X_test = validation_X,
+                            y_test = validation_y,
+                            metric_list = metric_list)
+    validation_loss = validation$loss
+    }
+  }
+
   ## Calculate final loss----
   ###If regularization is not used, it will equal zero.
   if (loss_fn=="categorical_crossentropy"){
@@ -1731,17 +1792,22 @@ if (length(baselayers) > 1){
   
   loss = data_loss + reg_loss ##loss = data_loss if regularization not used
   
-  ## Status Reports----
+  ## Status Report----
   if (epoch == 1){
-    print(c("epoch", "loss", metric_list))
-    #report_history = data.frame()
+    report_head = c("epoch", "loss")
+    if (!is.null(validation_X)) report_head = c(report_head, "validation_loss")
+    report_head = c(report_head, metric_list)
+    print(report_head)
     }
   if (epoch %in% seq(0,epochs,by=print_every)){
-     report = c(epoch, loss)
-     for (metric in metric_list){
-       value = metrics[epoch, paste0(metric)]
-       report = c(report, value)
-     }
+    report = c(epoch, loss)
+    if (!is.null(validation_X)) report = c(report, validation_loss)
+    for (metric in metric_list){
+      value = metrics[epoch, paste0(metric)]
+      report = c(report, value)
+    }
+     
+    
    report = sapply(report, round, 7)
    print(report)
    #report_history = rbind(report_history, report)
@@ -1750,17 +1816,25 @@ if (length(baselayers) > 1){
   ## Send the losses to the metrics dataframe for tracking
   metrics[epoch, "loss"] = loss
   metrics[epoch, "data_loss"] = data_loss
-  
-  
+  metrics[epoch, "validation_loss"] = validation_loss
 }##end loop
   
   ##Final Output----
   final_metrics = list()
   final_metrics[["loss"]] = loss
   final_metrics[["data_loss"]] = data_loss
+  if (!is.null(validation_X)){
+    final_metrics[["validation_loss"]] = validation_loss
+  }
   for (metric in metric_list){
     final_metrics[[paste0(metric)]] = metrics[epochs, paste0(metric)]
+    if (!is.null(validation_X)){
+      validation_metrics = list()
+      validation_metrics[[paste0(metric)]] =
+                          validation$metrics[[paste0(metric)]]
+    }
   }
+  
   ##Final Predictions
   raw_predictions = layers[[length(layers)]]$output$output
   if (loss_fn=="categorical_crossentropy"){
@@ -1786,7 +1860,8 @@ if (length(baselayers) > 1){
   }
   
   ##Returns
-  list(final_metrics=final_metrics, metrics=metrics, 
+  list(final_metrics=final_metrics, validation=validation_metrics,
+       metrics=metrics, 
        predictions=predictions, raw_predictions=raw_predictions,
        parameters=parameters)
 }
@@ -1864,14 +1939,17 @@ fit_binary$final_metrics
 ```
 
 
-Now let's go back to multi-class classification, where we'll use a softmax function for the final activation function and categorical crossentropy for a loss function (we'll use our combined softmax activation + categorical crossentropy function as before). I'll also add some L2 regularization to the parameters.  
-
+Now let's go back to multi-class classification, where we'll use a softmax function for the final activation function and categorical crossentropy for a loss function (we'll use our combined softmax activation + categorical crossentropy function as before). I'll also add some L2 regularization to the parameters. Finally, I add some validation data to show that we can test the model on validation data during training. I implemented this _after_ the `test_model()` function below and it depends on that function, so keep that in mind.  
 
 ```{r}
+# Training data
 spiral_data = sim_data_fn(N=100, K=3)
 X = as.matrix(spiral_data[,c("x","y")])
 y_true = spiral_data$label
-
+# Validation data
+validation_data = sim_data_fn(N=50,K=3)
+X_valid = as.matrix(validation_data[,c("x","y")])
+y_valid = validation_data$label
 
 categ_model = initialize_model() |>
   add_dense(n_inputs = ncol(X), n_neurons = 128, dropout_rate = 0.01,
@@ -1884,14 +1962,25 @@ categ_model = initialize_model() |>
   add_activation("softmax_crossentropy") |>
   add_loss("categorical_crossentropy")
 
-
+#options(error=recover); debug(train_model)
 fit_categ = train_model(categ_model, inputs = X, y_true = y_true,
-                        epochs = 100, optimizer = "adam", 
+                        epochs = 1000, optimizer = "adam", 
                         learning_rate = 0.01, lr_decay = 1e-3, 
                         beta_1 = 0.5, beta_2 = 0.5,
-                        metric_list = c("accuracy"))
+                        metric_list = c("accuracy"),
+                        validation_X = X_valid, validation_y = y_valid)
 
 fit_categ$final_metrics
+```
+
+```{r}
+plot(fit_categ$metrics$epoch, fit_categ$metrics$loss, 
+     type = "l", col = "red", xlab = "epoch", ylab = "loss")
+lines(fit_categ$metrics$epoch, fit_categ$metrics$validation_loss, 
+     type = "l", col = "blue")
+legend(x = "topright", legend = c("training", "validation"),
+       lty = c(1, 1), col = c("red", "blue"))
+
 ```
 
 
@@ -2128,7 +2217,7 @@ if (length(baselayers) > 1){
 ```
 
 
-Let's test our last categprocal model:
+Let's test our last categorical model:
 
 ```{r}
 # First make some testing data
@@ -2145,6 +2234,7 @@ final_categ = test_model(model = categ_model,
 
 
 final_categ$metrics
+final_categ$loss
 
 #True test data
 plot(X_test, col = y_test)
@@ -2155,12 +2245,8 @@ plot(X_test, col = final_categ$predictions)
 
 
 
-
-
 TODO: 
-- add validation_data argument to the train_model fn (see nnfs pg. 496 for inspiration)  
 - add other classification metrics (specificity, sensitivity, precision, F1...)
-- cross validation? or separate "evaluate_model" fn?
 
 
 
