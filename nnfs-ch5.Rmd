@@ -234,7 +234,7 @@ layer_dropout = list(
 
 )#end layer_dropout
 
-### Activation Functions ------------------------------------------------------
+### Activation Functions------------------------------------------------------
 ## Linear ##
 activation_Linear = list(
   forward = function(input_layer){
@@ -340,8 +340,10 @@ activation_loss_SoftmaxCrossEntropy = list(
     inputs = input_layer$output
     #output layer's activation function
     softmax_out = activation_Softmax$forward(inputs)
-    #calculate loss
-    sample_losses = Categorical_CrossEntropy$forward(softmax_out, y_true)
+    #calculate loss (unless this were in a prediction phase)
+    if (!is.null(y_true)){
+      sample_losses = Categorical_CrossEntropy$forward(softmax_out, y_true)
+    } else sample_losses = NULL
     #function saves:
     list("output"=softmax_out, "sample_losses"=sample_losses) 
   },
@@ -780,18 +782,37 @@ optimizer_Adam = list(
 )
 
 ##function prints reminders for settings needed for each optimizer
-optimizer_REMINDME = function(optimizer = "sgd, adagrad, rmsprop, or adam"){
+optimizer_REMINDME = function(
+                    optimizer = "sgd, adagrad, rmsprop, adam, or general"){
   if(optimizer == "sgd"){
-    message("Momentum is optional, cache is not available. If you choose to set momentum rate in SGD arguments, set momentum = TRUE in parameter initialization function")
+    message("
+Momentum is optional (set TRUE or FALSE), cache is not available (set FALSE).
+If you choose to set 'momentum_rate' in SGD arguments to use momentum and control the exponential decay, set momentum = TRUE in parameter initialization function.")
   }
   if(optimizer == "adagrad"){
-    message("Initialize parameters with cache=TRUE, momentum=FALSE. The AdaGrad optimizer implements cache - a rolling average/history of past gradients - as a form of adaptive gradients (or 'per-parameter learning rates'.")
+    message("
+Initialize parameters with cache=TRUE, momentum=FALSE.")
   }
   if(optimizer == "rmsprop"){
-    message("Initialize parameters with cache=TRUE, momentum=FALSE. RMSProp implements cache like AdaGrad, but exponentially decays the cache. You will also have to set the 'rho' hyperparameter - the cache memory decay rate.")
+    message("
+Initialize parameters with cache=TRUE, momentum=FALSE. 
+Also set the 'rho' hyperparameter - the cache memory decay rate.")
   }
   if(optimizer == "adam"){
-    message("Initialize parameters with cache=TRUE & momentum=TRUE. To calculate parameter updates, Adam implements momentums in place of vanilla gradients and also applies cache to save a rolling average of the momentums.")
+    message("
+Initialize parameters with cache=TRUE & momentum=TRUE. 
+Also set the 'beta_1' and 'beta_2' hyperparameters, the exponential decay rates for the momentums and cache respectively.")
+  }
+  if(optimizer == "general"){
+    message("
+'learning_rate' (also known as alpha) determines the proportion of the gradient values used to update the weights & biases. This controls the speed the model learns. 
+'lr_decay' controls the rate at which that proportion decays (gets smaller) over the course of the epochs. 
+
+'epsilon' is a small value meant to prevent any division by zero.
+
+'momentum' is an exponentially decaying moving average of past gradients applied in the update equation so that current updates are informed by past updates. 
+
+'cache', or an adaptive learning rate, keeps a history of previous parameter updates to normalize them, effectively reducing the learning rate for parameters receiving large gradients and increasing the learning rate for those receiving small or infrequent updates." )
   }
   
 }
@@ -799,6 +820,87 @@ optimizer_REMINDME = function(optimizer = "sgd, adagrad, rmsprop, or adam"){
 
 
 ```
+
+Here I'm implementing a basic function to compute some classification metrics. I won't get into the details, but it essentially just makes a confusion matrix, derives the true positives, false positives, true negatives, and false negatives, and uses them to calculate various metrics.  
+[Here's a good introduction to confusion matrices and classification metrics](https://raw.githack.com/edrubin/EC524W22/master/lecture/006/006-slides.html#73).  
+
+_Problem_: If the model doesn't predict every class at least once, table wont 
+produce the right kind of confusion matrix (it will drop off the class like below). Need to find a fix for that.  
+    true
+pred  0  1
+   1 50 50
+```{r}
+#Classess: Assess Classification Performance
+classess = function(truths, predictions){
+  y_true = as.vector(truths)
+  y_hat = as.vector(predictions)
+
+  if (length(unique(y_true)) <= 2){
+    ##Binary Confusion Matrix
+    
+    ##Note: positive class will be whichever class is assigned to label 1
+    #Confusion Matrix
+    conf_mat = table(y_hat, y_true, dnn = c("pred", "true"))
+    
+    tp = conf_mat[1,1]
+    fp = conf_mat[1,2]
+    tn = conf_mat[2,2]
+    fn = conf_mat[2,1]
+    total = tp + fp + tn + fn
+    
+  metrics = data.frame(
+    accuracy = (tp + tn) / total, #share of correctly predicted labels
+    sensitivity = tp / (tp + fn), #share of true pos we predict correct
+    recall = sensitivity,
+    specificity = tn / (tn + fp), #share of true no's we predicted correct
+    precision = tp / (tp + fp), #share of predicted pos that are correct
+    
+    #F1 Score: the harmonic mean of precision and recall
+    f1_score = 2 * (precision * recall) / (precision + recall)
+  )
+    #return
+    list(conf_mat = conf_mat, metrics = metrics)
+    
+    
+  } else if (length(unique(y_true)) > 2){
+    ##Multiclass Confusion Matrix
+    
+    #Confusion Matrix
+    conf_mat = table(y_hat, y_true, dnn = c("pred", "true"))
+    
+    #Find TP, TN, FP and FN for each individual class
+    #Add metrics to a dataframe
+    metrics = data.frame(class = 1:length(unique(y_true)))
+    for (class in unique(y_true)){
+      tp = conf_mat[class, class]
+      fp = sum(conf_mat[class, ]) - tp
+      tn = sum(conf_mat[-class, -class])
+      fn = sum(conf_mat[class, ]) - tp   
+      total = tp + fp + tn + fn
+    
+      accuracy = (tp + tn) / total
+        metrics[class, "accuracy"] = accuracy
+      sensitivity = tp / (tp + fn)
+        metrics[class, "sensitivity"] = sensitivity
+      recall = sensitivity
+        metrics[class, "recall"] = recall
+      specificity = tn / (tn + fp)
+        metrics[class, "specificity"] = specificity
+      precision = tp / (tp + fp)
+        metrics[class, "precision"] = precision
+      
+      f1_score = 2 * (precision * recall) / (precision + recall)
+        metrics[class, "f1_score"] = f1_score
+    }
+    #return
+    list(conf_mat = conf_mat, metrics = metrics)
+  }
+}
+
+```
+
+
+
 
 And here is our function to simulate the spiral data. 
 ```{r sim-data-fn}
@@ -834,14 +936,16 @@ return(spiral_data)
 
 ```{r}
 ## Create sine-wave Data ----
-x  = seq(0, 2*pi, length.out = 100) 
-sine_data = data.frame(x = x/max(x), ##normalized
-                       y = sin(x))
-
-##shuffle
-sine_data = sine_data[sample(1:nrow(sine_data)), ]
-
-plot(sine_data)
+sine_data_sim = function(samples, multiple){
+  x  = seq(0, multiple*pi, length.out = samples) 
+  sine_data = data.frame(x = x/max(x), ##normalized
+                           y = sin(x))
+  ##shuffle up the samples
+  sine_data = sine_data[sample(1:nrow(sine_data)), ]
+  return(sine_data)
+}
+    
+plot(sine_data_sim(100, 2))
 ```
 
 
@@ -852,12 +956,6 @@ Now we add batching into the training workflow. This requires just one additiona
 ## Build Model----
 initialize_model = function(){
     # Create an empty list for network objects
-    
-    ##if # of layers is predefined, pre-allocate the vector
-    ##this is faster than the simple empty list
-    # if (!is.null(n_layers)){
-    #   layer_list = vector(mode = "list", length = n_layers)
-    # } else layer_list = list()
     model = list()
     return(model)
 }
@@ -939,7 +1037,7 @@ train_model = function(model, inputs, y_true, epochs,
                        metric_list=NULL, 
                        validation_X=NULL, validation_y=NULL,
                        batch_size=NULL,
-                       print_every=100){
+                       epoch_print=100, batch_print=1){
   
   optim_args = list(...)
   if (!is.null(metric_list)){
@@ -1053,7 +1151,7 @@ for (epoch in 1:epochs){
  ##set metrics list to store batch metrics (reset each epoch) 
  batch_metrics = data.frame(step = 1:train_steps) 
 
- for(step in 1:train_steps){
+ for(step in 1:train_steps){ ##batching
    
   #Deal with batches:
    ##if no batch_size given, then train using one step and full dataset
@@ -1405,6 +1503,24 @@ if (length(baselayers) > 1){
       accumulated_count = accumulated_count + length(loss_layer$sample_losses)
       ##this should be about equal but may differ due to overlapping
  
+      
+  ##Batch-wise Status Report
+if (batch_print > 0){
+  if (step %in% seq(0, train_steps, by = batch_print)){
+      report_head = c("batch_step", "loss", metric_list)
+      report = c(step, mean(loss_layer$sample_losses))
+      for (metric in metric_list){
+        value = batch_metrics[step, paste0(metric)] /
+                              batch_metrics[step, "count"]
+        report = c(report, value)
+      }
+      
+      report = sapply(report, round, 7)
+      print(paste(report_head, collapse = " | "), quote = FALSE)
+      print(paste(report, collapse = " | "), digits = 5, quote = FALSE)
+  }
+}
+      
  }##end batch steps loop
 
  # Calculate loss for the epoch
@@ -1422,10 +1538,9 @@ if (length(baselayers) > 1){
    ##divide by the total number of inputs to get the average
    epoch_metric = sum(batch_metrics[[paste0(metric)]]) / 
                       sum(batch_metrics[["count"]])
-   
-   # mean_metric = mean(batch_metrics[[paste0(metric)]])
+   ##send to metrics df
    metrics[epoch, paste0(metric)] = epoch_metric
-  
+   
  } 
 
 
@@ -1479,26 +1594,26 @@ if(!is.null(validation_X)){
 }
  
  # Status Report----
-  if (epoch == 1){
+  #if (epoch == 1){
     report_head = c("epoch", "loss")
     if (!is.null(validation_X)) report_head = c(report_head, "validation_loss")
     report_head = c(report_head, metric_list)
-    print(report_head)
-    }
-  if (epoch %in% seq(0,epochs,by=print_every)){
+    #print(report_head)
+    #}
+  if (epoch %in% seq(0,epochs,by=epoch_print)){
     report = c(epoch, loss)
     if (!is.null(validation_X)) report = c(report, validation_loss)
     for (metric in metric_list){
       value = metrics[epoch, paste0(metric)]
       report = c(report, value)
     }
-     
-    
+   
    report = sapply(report, round, 7)
-   print(report)
-   #report_history = rbind(report_history, report)
+   message(paste(report_head, collapse = " | "))
+   message(paste(report, collapse = " | ")) #, digits = 5, quote = FALSE)
   } 
   
+    
   ## Send the losses to the metrics dataframe for tracking
   metrics[epoch, "loss"] = loss
   metrics[epoch, "data_loss"] = data_loss
@@ -1508,7 +1623,7 @@ if(!is.null(validation_X)){
   
 }##end epoch loop
   
-  ##Final Output----
+#Final Output----
   final_metrics = list()
   validation_metrics = list()
   final_metrics[["loss"]] = loss
@@ -1524,22 +1639,6 @@ if(!is.null(validation_X)){
       }
   }
   
-  ##Final Predictions
-  raw_predictions = layers[[length(layers)]]$output$output
-  if (loss_fn=="categorical_crossentropy"){
-    predictions = max.col(raw_predictions, ties.method = "random")
-  } else if (loss_fn=="binary_crossentropy"){
-    predictions = (raw_predictions > 0.5) * 1 
-  }
-  else {
-    if (ncol(raw_predictions) > 1){
-      ##if using multiple output neurons for a regression or binary problem...
-      ##this is temporary, may want to change
-      predictions = rowMeans(raw_predictions)
-    } else predictions = raw_predictions
-  }
-  
-  
   ##Save final model parameters
   parameters = list()
   for (b in baselayers){
@@ -1548,6 +1647,33 @@ if(!is.null(validation_X)){
     names(parameters)[[length(parameters)]] = paste0("layer",b)
   }
   
+
+  ##Final Predictions
+  ##Need to do a forward pass of the data due to batching
+  ##Might just have user use test_model() on training data to generate preds
+  last_fit = list("parameters" = parameters)
+  make_prediction = test_model(model = model,
+                               trained_model = last_fit,
+                               X_test = inputs,
+                               y_test = y_true
+                               ) 
+  raw_predictions = make_prediction$raw_predictions
+  predictions = make_prediction$predictions 
+  
+  
+  # raw_predictions = layers[[length(layers)]]$output$output
+  # if (loss_fn=="categorical_crossentropy"){
+  #   predictions = max.col(raw_predictions, ties.method = "random")
+  # } else if (loss_fn=="binary_crossentropy"){
+  #   predictions = (raw_predictions > 0.5) * 1 
+  # }
+  # else {
+  #   if (ncol(raw_predictions) > 1){
+  #     ##if using multiple output neurons for a regression or binary problem...
+  #     ##this is temporary, may want to change
+  #     predictions = rowMeans(raw_predictions)
+  #   } else predictions = raw_predictions
+  # }
   ##Returns
   list(final_metrics=final_metrics, validation_metrics=validation_metrics,
        metrics=metrics, 
@@ -1561,7 +1687,7 @@ if(!is.null(validation_X)){
 ```{r test_model}
 # test_model()----
 test_model = function(model, trained_model, 
-                      X_test, y_test,
+                      X_test, y_test=NULL,
                       metric_list=NULL){
   inputs = X_test
   y_true = y_test
@@ -1648,10 +1774,11 @@ if (length(baselayers) > 1){
   }#end loop
 }  
 
-  # Calculate Loss Layer
+# Calculate Loss Layer if y_true is given
   ##Determine the selected loss function
   loss_fn = model[[length(model)]]$class ##last layer should be a loss layer
   
+if(!is.null(y_true)){  
   if (loss_fn=="mse"){
     loss_layer = loss_MeanSquaredError$forward(
       y_pred = layers[[length(layers)]]$output$output,
@@ -1670,7 +1797,7 @@ if (length(baselayers) > 1){
   } else if (loss_fn=="categorical_crossentropy"){
     loss_layer = layers[[length(layers)]]$output
   }
-  
+
   # Calculate Regularized Loss
   ##If regularization is not used, this code will still run but reg_loss
   ##will equal zero.
@@ -1723,6 +1850,11 @@ if (length(baselayers) > 1){
     names(metrics)[[length(metrics)]] = paste0(metric)
   
   }#end metrics loop
+} else { ##if y_true is not given, then no loss/metrics calculated
+  loss = NULL
+  data_loss = NULL
+  metrics = NULL
+}
   
   ## Final Predictions
   raw_predictions = layers[[length(layers)]]$output$output
@@ -1741,21 +1873,22 @@ if (length(baselayers) > 1){
  
   
   ##Output:
-  list(predictions=predictions, raw_predictions = raw_predictions,
-       loss=loss, data_loss=data_loss,
-       metrics=metrics)
+  if(!is.null(y_true)){  
+    list(predictions=predictions, raw_predictions = raw_predictions,
+         loss=loss, data_loss=data_loss,
+        metrics=metrics)
+  } else {
+    list(predictions=predictions, raw_predictions = raw_predictions)
+  }
   
 }
 
 ```
 
 TODO: 
-- finish the batching... was working on accumulating loss across batches and determining the average for the epoch. then replicating with other metrics.  
- - then need to do the same for the validation set  
- - nnfs pg 550
-
-
-- add other classification metrics (specificity, sensitivity, precision, F1...)
+- test out the test_model fn - I updated it so that if y_true is not given, the loss/metric calc stage is skipped and the fn is just used to generate predictions  
+ - *need to add that update and also the updated softmax_crossentropy fn to pkg*
+ - 
 
 
 
@@ -1837,11 +1970,12 @@ Now let's go back to multi-class classification, where we'll use a softmax funct
 
 ```{r}
 # Training data
-spiral_data = sim_data_fn(N=100, K=3)
+classes = 2
+spiral_data = sim_data_fn(N=50, K=classes)
 X = as.matrix(spiral_data[,c("x","y")])
-y_true = spiral_data$label
+y_true = spiral_data$label - 1
 # Validation data
-validation_data = sim_data_fn(N=50,K=3)
+validation_data = sim_data_fn(N=50,K=classes)
 X_valid = as.matrix(validation_data[,c("x","y")])
 y_valid = validation_data$label
 
@@ -1852,18 +1986,19 @@ categ_model = initialize_model() |>
   add_dense(n_inputs = 128, n_neurons = 64, dropout_rate = 0.001,
             weight_L2 = 5e-4, bias_L2 = 5e-4) |>
   add_activation("relu") |>
-  add_dense(n_inputs = 64, n_neurons = 3) |>
+  add_dense(n_inputs = 64, n_neurons = length(unique(y_true))) |>
   add_activation("softmax_crossentropy") |>
   add_loss("categorical_crossentropy")
 
 #options(error=recover); debug(train_model)
 fit_categ = train_model(categ_model, inputs = X, y_true = y_true,
-                        epochs = 100, optimizer = "adam", 
+                        epochs = 10, optimizer = "adam", 
                         learning_rate = 0.01, lr_decay = 1e-3, 
                         beta_1 = 0.5, beta_2 = 0.5,
                         metric_list = c("accuracy"),
                         validation_X = X_valid, validation_y = y_valid,
-                        batch_size = 128)
+                        batch_size = NULL,
+                        epoch_print = 10, batch_print = 0)
 
 fit_categ$final_metrics
 ```
@@ -1878,6 +2013,27 @@ legend(x = "topleft", legend = c("training", "validation"),
 
 ```
 The model's performance suffers slighltly when using batches, but this will be useful for larger datasets.  
+
+Let's check out the performance of the model using the `classess()` function:  
+
+```{r}
+classification_assessment = classess(truths = spiral_data$label,
+                                     predictions = fit_categ$predictions)
+## Confusion Matrix (multiclass)
+classification_assessment$conf_mat
+
+## Metrics
+classification_assessment$metrics
+
+```
+Note that the accuracies are different than if we just looked at the proportion of correctly guessed labels, which is what the `train_model()` function does to calculate overall accuracy:
+```{r}
+# sum of where labels = predicted labels / total labels
+sum(spiral_data$label == fit_categ$predictions)/length(spiral_data$label)
+```
+This is due to how the `classess()` function handles assessment of multiclass classification models. It calculates the accuracy for class $i$, treating all other classes $j \neq i$ as one negative class, effectively simplifying the problem to that of a binary classification task. This gives us a more granular understanding of the model's performance at predicting each class.  
+
+
 
 Let's test our last categorical model on testing data.  
 
@@ -1903,9 +2059,31 @@ plot(X_test, col = y_test)
 
 #Predicted test data
 plot(X_test, col = final_categ$predictions)
+
+
+#Plot multiclass ROC AUC curve
+library(yardstick)
+pred_df = data.frame(final_categ$raw_predictions, y_test)
+colnames(pred_df) = c("class1", "class2", "class3", "y_true")
+roc = yardstick::roc_curve(pred_df, truth = as.factor(y_true),
+                           c(class2, class2, class3), .level = class1)
+plot(x = 1 - roc$specificity, y = roc$sensitivity, col = roc$.level,
+     type = "l")
+
 ```
 
+If we are predicting onto new, unlabeled data, we can simply ignore the y_test argument and test_model() will still provide predictions:
 
+```{r}
+##Predict onto "unlabeled" data
+predict = test_model(model = categ_model,
+                     trained_model = fit_categ,
+                     X_test = X_test)
+predict$predictions
+
+
+plot(x = X_test, col = predict$predictions)
+```
 
 
 
