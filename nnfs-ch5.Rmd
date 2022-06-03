@@ -830,57 +830,74 @@ produce the right kind of confusion matrix (it will drop off the class like belo
 pred  0  1
    1 50 50
 ```{r}
-#Classess: Assess Classification Performance
+#Classess: Assess Classification Performance ----
 classess = function(truths, predictions){
   y_true = as.vector(truths)
   y_hat = as.vector(predictions)
 
 #Binary Confusion Matrix
   if (length(unique(y_true)) <= 2){
-    
     #Note: positive class will be whichever class is assigned to label 1
     #Confusion Matrix
     ##Need to initialize a matrix of the correct length with zeros due to 
     ##possibility of predictions not containing every possible class
-    conf_mat = matrix(0, 
-           nrow = length(unique(y_true)), ncol = length(unique(y_true)))
-    tab = table(y_hat, y_true)
-    
-    for (pred in unique(y_hat)){
-      for (class in unique(y_true))
-      conf_mat[pred, class] = tab[pred, class]
+    y_true = y_true + 1 ##cant index using 0 and 1
+    y_hat = y_hat + 1
+      # conf_mat = matrix(0, ##create matrix of 0s of appropriate length
+      #        nrow = length(unique(y_true)), 
+      #        ncol = length(unique(y_true)))
+    conf_mat = table(y_hat, y_true) #tabulate the predictions and truths
+    diff = setdiff(y_true, y_hat) ##figure out which if any class not predicted
+    #fill out table if missing class, but order depends on which class
+    for (class in diff){
+      newrow = array(0, dim = length(unique(y_true)))  
+      conf_mat = rbind(conf_mat,newrow)
+      conf_mat = conf_mat[order(c(1:(nrow(conf_mat)-1),class-0.5)),]
     }
+
     #Format Confusion Matrix
-    dimnames(conf_mat) = list("pred"=c(unique(y_true)),
-                              "true"=c(unique(y_true)))
+    dimnames(conf_mat) = list("pred"=c(sort(unique(y_true)-1)),
+                              "true"=c(sort(unique(y_true)-1))
+                              )
     tp = conf_mat[1,1]
     fp = conf_mat[1,2]
     tn = conf_mat[2,2]
     fn = conf_mat[2,1]
     total = tp + fp + tn + fn
     
-  metrics = data.frame(
+  #Calculate metrics  
+  m = data.frame(
     accuracy = (tp + tn) / total, #share of correctly predicted labels
     sensitivity = tp / (tp + fn), #share of true pos we predict correct
-    recall = sensitivity,
+    recall = tp / (tp + fn), #recall = sensitivity
     specificity = tn / (tn + fp), #share of true no's we predicted correct
-    precision = tp / (tp + fp), #share of predicted pos that are correct
-    #F1 Score: the harmonic mean of precision and recall
-    f1_score = 2 * (precision * recall) / (precision + recall)
+    precision = tp / (tp + fp) #share of predicted pos that are correct
   )
+  m = cbind(m,
+    #F1 Score: the harmonic mean of precision and recall
+    f1_score = 2 * (m$precision * m$recall) / (m$precision + m$recall)
+                  )
     #return
-    list(conf_mat = conf_mat, metrics = metrics)
+    list(conf_mat = conf_mat, metrics = m)
     
 #Multiclass Confusion Matrix
   } else if (length(unique(y_true)) > 2){
-    conf_mat = matrix(0, 
-           nrow = length(unique(y_true)), ncol = length(unique(y_true)))
-    tab = table(y_hat, y_true)
-
-    for (pred in unique(y_hat)){
-      for (class in unique(y_true))
-      conf_mat[pred, class] = tab[pred, class]
+      # conf_mat = matrix(0, 
+      #        nrow = length(unique(y_true)), ncol = length(unique(y_true)))
+    conf_mat = table(y_hat, y_true)
+    
+    diff = setdiff(y_true, y_hat)
+    for (class in diff){
+      newrow = array(0, dim = length(unique(y_true)))  
+      conf_mat = rbind(conf_mat,newrow)
+      conf_mat = conf_mat[order(c(1:(nrow(conf_mat)-1),class-0.5)),]
     }
+    #Idea source: https://stackoverflow.com/questions/11561856/add-new-row-to-dataframe-at-specific-row-index-not-appended.
+    
+      # for (pred in unique(y_hat)){
+      #   for (class in unique(y_true))
+      #   conf_mat[pred, class] = tab[pred, class]
+      # }
     #Format Confusion Matrix
     dimnames(conf_mat) = list("pred"=c(sort(unique(y_true))),
                               "true"=c(sort(unique(y_true)))
@@ -911,6 +928,8 @@ classess = function(truths, predictions){
       f1_score = 2 * (precision * recall) / (precision + recall)
         metrics[class, "f1_score"] = f1_score
     }
+    overall_accuracy = sum(y_hat == y_true) / length(y_true)
+    metrics = cbind(metrics, overall_accuracy)
     #return
     list(conf_mat = conf_mat, metrics = metrics)
   }
@@ -963,8 +982,6 @@ sine_data_sim = function(samples, multiple){
   sine_data = sine_data[sample(1:nrow(sine_data)), ]
   return(sine_data)
 }
-    
-plot(sine_data_sim(100, 2))
 ```
 
 
@@ -987,10 +1004,7 @@ add_dense = function(model, n_inputs, n_neurons, dropout_rate = 0,
                         weight_L1=weight_L1, weight_L2=weight_L2,
                         bias_L1=bias_L1, bias_L2=bias_L2,
                         class = "layer_dense", pos = pos)
-    
-    #layer_n = length(model) + 1 ##determine the layer's sequence number
-    #layer_name = deparse(substitute(layer)) ##extract string with layer name
-    
+
     # Add layer objects to the model
     model = c(model, "layer" = list(dense_args))
     # Give the layer a unique name corresponding to position in sequence
@@ -999,18 +1013,6 @@ add_dense = function(model, n_inputs, n_neurons, dropout_rate = 0,
     return(model)
     
 }
-  # add_dropout = function(model, dropout_rate=0){
-  #   pos = length(model) + 1
-  #   base_layer = length(model) ##the dense layer that this layer is tied to
-  #   dropout_args = list(dropout_rate=dropout_rate,
-  #                       class = "layer_dropout", 
-  #                       pos = pos, base_layer = base_layer)
-  #   
-  #   model = c(model, "layer" = list(dropout_args))
-  #   names(model)[[pos]] = paste0("layer",pos)
-  #   
-  #   return(model)
-  #},
 add_activation =  function(model, activ_fn = c("linear", "relu", "sigmoid",
                                    "softmax_crossentropy")){
     class = activ_fn
@@ -1056,7 +1058,7 @@ train_model = function(model, inputs, y_true, epochs,
                        metric_list=NULL, 
                        validation_X=NULL, validation_y=NULL,
                        batch_size=NULL,
-                       epoch_print=100, batch_print=1){
+                       epoch_print=100, batch_print=0){
   
   optim_args = list(...)
   if (!is.null(metric_list)){
@@ -1905,10 +1907,7 @@ if(!is.null(y_true)){
 ```
 
 TODO: 
-- test out the test_model fn - I updated it so that if y_true is not given, the loss/metric calc stage is skipped and the fn is just used to generate predictions  
- - *need to add that update and also the updated softmax_crossentropy fn to pkg*
- - 
-
+- figure out why adding more layers didnt work
 
 
 
@@ -1963,7 +1962,7 @@ plot(fit$metrics$epoch, fit$metrics$mse, type = "l")
 Let's try a classification task. 
 First, a binary problem where we'll use a sigmoid function for the final activation function and binary crossentropy for a loss function. Note that piping makes building a model even easier. 
 ```{r}
-spiral_binary = sim_data_fn(N = 200, K = 2)
+spiral_binary = sim_data_fn(N = 100, K = 2)
 X = spiral_binary[,c("x", "y")] ## leave out 'label'
 X = as.matrix(X)
 y_true = spiral_binary$label - 1
@@ -1979,7 +1978,7 @@ fit_binary = train_model(binary_model, inputs = X, y_true = y_true,
                     epochs = 100, optimizer = "adam", 
                     learning_rate = 0.001, lr_decay = 5e-7,
                     metric_list = c("accuracy"),
-                    beta_1 = 0.2, beta_2 = 0.2)
+                    beta_1 = 0.2, beta_2 = 0.2,batch_print = 0)
 
 fit_binary$final_metrics
 ```
@@ -1992,7 +1991,7 @@ Now let's go back to multi-class classification, where we'll use a softmax funct
 classes = 3
 spiral_data = sim_data_fn(N=50, K=classes)
 X = as.matrix(spiral_data[,c("x","y")])
-y_true = spiral_data$label - 1
+y_true = spiral_data$label
 # Validation data
 validation_data = sim_data_fn(N=50,K=classes)
 X_valid = as.matrix(validation_data[,c("x","y")])
