@@ -66,7 +66,7 @@ plot(spiral_data$x, spiral_data$y, col = spiral_data$label)
 
 
 # The Neural Network Functions
-All of the functions used here were built from scratch using R's `base` package. This is everything we need to perform a basic forward-pass, backward-pass, and parameter optimization.  
+All of the functions used here were built from scratch using R's `base`/core packages. This is everything we need to perform a basic forward-pass, backward-pass, and parameter optimization.  
 Included are functions to:  
 - Initialize random parameters (weights & biases) for each layer (hidden and output layers)  
 - Create a densely connected layer with specified number of neurons.  
@@ -356,34 +356,34 @@ for (epoch in 1:tot_epochs) {
 layer1 = layer_dense$forward(inputs = spiral_X, ##feed in data
                              n_neurons = 64,    ##specify desired neurons
                              parameters = l1_params) ##provide layer parameters
-  layer1_relu = activation_ReLU$forward(input_layer = layer1$output)# #apply ReLU
-      layer2 = layer_dense$forward(inputs = layer1_relu$output,##feed in ReLU output
-                                   n_neurons = 3, ##3 neurons - 1 for each class
+  layer1_relu = activation_ReLU$forward(input_layer = layer1$output) ##apply ReLU
+      layer2 = layer_dense$forward(inputs = layer1_relu$output, ##feed in ReLU output
+                                   n_neurons = 3,          ##3 neurons - 1 for each class
                                    parameters = l2_params) ##provide params
           output = 
+          ##uses a combined softmax/crossentropy fn to apply a softmax activation function and calculate loss.
           activation_loss_SoftmaxCrossEntropy$forward(inputs = layer2$output,
                                                   y_true = spiral_data$label)
-          ##uses a combined softmax/crossentropy fn to apply a softmax activation function and calculate loss.
               #metrics:
-              LOSS = output$loss ##extract calculate loss
+              LOSS = output$loss  ##extract calculated loss
               PRED = max.col(output$softmax_output, ties.method = "random")
                 ##extract predictions based on category with highest predicted probability
               ACC = mean(PRED==spiral_data$label) ##calculate accuracy based on portion of correctly labeled samples
 
           #Backward-pass
-          loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward( ##backprop softmax fn
+          loss_softm_b = activation_loss_SoftmaxCrossEntropy$backward(  ##backprop loss & softmax fn (easier in 1 step)
                                       dvalues = output$softmax_output, 
                                       y_true = spiral_data$label)
-      l2_b = layer_dense$backward(inputs = layer2$inputs, ##backprop layer2, pass in softmax derivatives (chain rule)
+      l2_b = layer_dense$backward(inputs = layer2$inputs,  ##backprop layer2, pass in softmax derivatives (chain rule)
                             weights = layer2$weights,
                             dvalues = loss_softm_b$dinputs)
-  l1_relu_b = activation_ReLU$backward(inputs = layer1_relu$inputs, ##backprop layer1's ReLU, pass in layer2 derivatives
+  l1_relu_b = activation_ReLU$backward(inputs = layer1_relu$inputs,  ##backprop layer1's ReLU, pass in layer2 derivatives
                                        dvalues = l2_b$dinputs)     
-l1_b = layer_dense$backward(inputs = layer1$inputs, ##backprop layer1, pass in layer1 ReLU derivatives
+l1_b = layer_dense$backward(inputs = layer1$inputs,  ##backprop layer1, pass in layer1 ReLU derivatives
                             weights = layer1$weights,
                             dvalues = l1_relu_b$dinputs)      
 
-#Optimize parameters with learning rate of 0.5
+#Optimize (update) parameters with learning rate of 0.5
 l1_optim_params = optimizer_SGD$update_params(layer_forward = layer1,
                                        layer_backward = l1_b,
                                        learning_rate = 0.5)
@@ -414,7 +414,7 @@ l2_params = l2_optim_params
 
 ```
 
-The neural net is able to learn the classes quite effectively. As it minimizes loss, the accuracy of its predictions steadily increases. Of course, it is not necessarily a hard task for a model to memorize data. To truly test this network we would need to provide it with some test data, something I plan to do when my full neural net package is complete. For now, I am happy with what this program is capable of. 
+The neural net is able to learn the classes quite effectively. As it minimizes loss, the accuracy of its predictions steadily increases. Of course, it is not necessarily a hard task for a model to memorize data. To truly test this network we would need to provide it with some test data, something I plan to do when the full neural net package is complete. For now, I am happy with what this program is capable of. 
 
 
 **Final Metrics**
