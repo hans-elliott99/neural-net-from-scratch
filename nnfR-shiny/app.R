@@ -3,10 +3,9 @@ library(dplyr)
 library(ggplot2)
 library(ggthemes)
 library(kableExtra)
-#devtools::install_github("hans-elliott99/nnfR") ##if needed
+#devtools::install_github("hans-elliott99/nnfR") ##if need to update
 library(nnfR)
 ##Deployment:
-#library(rsconnect)
 #rsconnect::deployApp('nnfR-shiny')
 
 
@@ -25,7 +24,7 @@ ui = fluidPage(
   ),
   # App title ----
   titlePanel("Classification with an Artificial Neural Network", 
-             windowTitle = "nnfR"),
+             windowTitle = "nnfR-shiny"),
   #Introduction text ----
   shiny::verticalLayout(
     mainPanel(
@@ -40,7 +39,7 @@ ui = fluidPage(
       h4("Tune the network by experimenting with different optimizer 
         hyperparameters and training epochs."),
       br(),
-      p("This app was built from a custom neural network built entirely from R!
+      p("This app was built on a homemade neural network programmed entirely in R!
         See the nnfR package for more information."),
       br(),
       tags$a(href="https://github.com/hans-elliott99/nnfR", target="_blank",
@@ -67,7 +66,15 @@ ui = fluidPage(
                   label = "Number of Classes",
                   min = 2,
                   max = 10,
-                  value = 3), 
+                  value = 3),
+      br(),
+      p("Each point in the plot represents one observation. Every observation 
+        belongs to one class out of the chosen number. The neural network will
+        be fed this data and be trained to learn which class each observation 
+        belongs to."),
+      p("Increasing the amount of data might improve the model's ability to 
+        learn the classes, but is also more computationally demanding and could
+        slow down training times."),
       width = 4
     ),
     # Main panel for displaying plot outputs
@@ -87,7 +94,7 @@ ui = fluidPage(
     sliderInput(inputId = "num_neurons",
                 label = "Number of Neurons",
                 min = 1,
-                max = 5,
+                max = 64,
                 value = 3),
     sliderInput(inputId = "dropout",
                 label = "Dropout rate",
@@ -99,7 +106,24 @@ ui = fluidPage(
     # Main panel for displaying model
     mainPanel(
       h4("Network Structure"),
-      shiny::uiOutput(outputId = "model"), width = 6
+      shiny::uiOutput(outputId = "model"), 
+      p("We control the number of neurons in the hidden layer. Increasing the number
+        makes for a more complex neural network, which could improve performance (but again,
+        is more computationally demanding). The number of neurons in the output layer
+        is equal to the number of classes we want to predict (except for in binary
+        clasification, where we'll use 1 output neuron)."),
+      p("Dropout randomly disables some neurons during training, which might help
+        activate more neurons and make the model more generalizable. We do
+        not apply dropout to the output layer."),
+      p("Activation functions are applied to the output of each neuron. ReLU is a common
+        function used to introduce nonlinearity. Softmax and sigmoid activation functions
+        coerce the outputs to be between 0 and 1, so that the model predicts the probability 
+        an observation belongs to each class. It's final prediction is whichever class receives the 
+        highest probability."),
+      p("Loss functions are special measures of error. We compare the model's predicted
+        probabilities to the true classes in order to determine how the model's 
+        parameters should be altered before the next epoch."),
+      width = 6
     )
   ),
   
@@ -113,7 +137,7 @@ ui = fluidPage(
                        label = "Learning rate",
                        min = 0,
                        max = 1,
-                       value = 0.01,
+                       value = 0.1,
                        step = 0.001
                        ),
     shiny::numericInput(inputId = "lr_decay",
@@ -139,26 +163,30 @@ ui = fluidPage(
                 min = 1,
                 max = 100,
                 value = 10,
-                step = 1)
-    
+                step = 1),
+    p("An epoch is just one complete pass of the simulated data through the neural network.
+      More epochs give the model more chances to learn, but could lead to overfitting.")
     ),
     mainPanel(
-      shiny::plotOutput(outputId = "pred_plot"),width = 6
+      shiny::plotOutput(outputId = "pred_plot"),
+      br(),
+      br(),
+      br(),
+      p("Colored regions attempt to depict the model's decision boundaries (i.e.,
+      what your model would predict for a point within in that region). 
+      Regions containing points of a different class suggest areas of uncertainty."),
+      width = 6,
     )
   ),
   # Sidebar layout with training inputs ---- 
   verticalLayout(
-    # sidebarPanel(
-    #   h4("Training"),
-    #   sliderInput(inputId = "epochs",
-    #               label = "Number of Training Epochs",
-    #               min = 1,
-    #               max = 100,
-    #               value = 10,
-    #               step = 1)
-    # ),
     # Main panel for displaying the training results
     mainPanel(h3("Training Performance"),
+              p("Here we can see the model's performance over the course of training.
+                We hope to see loss (a measure of error) decreasing over time while 
+                accuracy should be increasing. Validation data gives us a sense of how the model would do if it was
+                used to predict the classes of observations it had never seen before."),
+              p("Other metrics give insight into the model's ability to predict each class."),
       fluidRow(
         splitLayout(cellWidths = c("50%", "50%"), 
                     plotOutput("loss_plot"), 
@@ -170,7 +198,7 @@ ui = fluidPage(
       h6("rows = predicted class, columns = true class"),
       splitLayout(cellWidths = c("50%","50%"),
                   shiny::uiOutput(outputId = "conf_mat"),
-                  shiny::uiOutput(outputId = "performance"),
+                  shiny::uiOutput(outputId = "performance")
                   )
     )
   )
@@ -180,6 +208,7 @@ ui = fluidPage(
 server = function(input, output) { 
   #Sim data ----
   sim_spiral = reactive({
+    set.seed(159)
     spiral_data = nnfR::sim_spiral_data(N = input$data_points, 
                                         K = input$num_class)
     if (input$num_class <= 2) spiral_data$label = spiral_data$label - 1
@@ -241,24 +270,25 @@ server = function(input, output) {
   output$model = renderTable({
     
     output_neurons = ifelse(input$num_class <= 2, 1, input$num_class)
-    
-    
     model = build_model()
+    if (model$layer4$class == "softmax_crossentropy") a = "softmax"
+    if (model$layer4$class == "sigmoid") a = "sigmoid"
+    
     model_info = tibble(
       "Layer" = c("Hidden Layer", "Output Layer"),
       "Number of Inputs" = c("2 (x & y coordinates)", input$num_neurons),
       "Number of Neurons" = c(input$num_neurons, output_neurons),
       "Dropout Rate" = c(input$dropout, 0),
-      "Activation Function" = c("reLU", model$layer4$class),
+      "Activation Function" = c("reLU", a),
       "Loss Function" = c(" -- ", model$layer5$class)
     )
     
     print(model_info)
-  }, striped = TRUE)
+  }, striped = T, bordered = T)
 
-  #Train model ----
+  #Train model & make predictions ----
   fit_model = reactive({
-
+    set.seed(159)
     ##Data
     spiral_data = sim_spiral()
     X = as.matrix(spiral_data[,c("x","y")])
@@ -287,36 +317,66 @@ server = function(input, output) {
                             validation_X = X_val,
                             validation_y = y_val,
                             epoch_print = input$epochs)
-    return(fit)
+    
+    predict = nnfR::test_model(model = model,
+                               trained_model = fit,
+                               X_test = X,
+                               y_test = y,
+                               metric_list = c("accuracy"))
+    fit = list("fit"=fit, "predict"=predict)
+    #return(fit)
   })
   
   #Plot predictions ----
   output$pred_plot = renderPlot({
-    fit = fit_model()
+    fit_model = fit_model()
+    fit = fit_model$fit
+    model = build_model()
     spiral_data = sim_spiral()
     spiral_data = spiral_data[,c("x","y")]
-    data = cbind(spiral_data, pred = fit$predictions)  
+    data = cbind(spiral_data, pred = fit_model$predict$predictions)  
+    
+    #x = cbind(spiral_data, pred = fit_categ$predictions)
+    #make decision boundary area
+    ##make grid of x and y coords
+    x_vals = seq(min(spiral_data$x), max(spiral_data$x), by = 0.05)
+    y_vals = seq(min(spiral_data$y), max(spiral_data$y), by = 0.05)
+    full_grid = as.matrix(expand.grid(x_vals, y_vals))
+    ##predict onto grid
+    pred = test_model(model = model,
+                      trained_model = fit,
+                      X_test = full_grid)
+    ##create df for ggplot
+    full_grid = data.frame(full_grid, pred = pred$predictions)
     
     data %>%
       ggplot(aes(x = x, y = y, color = as.factor(pred))) +
-      geom_point(alpha = 0.7) +
+      ##plot decision boundaries -density shows overlap...
+        # stat_density_2d(data = full_grid,
+        #           aes(x = Var1, y = Var2, fill = as.factor(pred)),
+        #           alpha = 0.08, geom = "polygon", linetype = 0) +
+      geom_raster(data = full_grid,
+                  aes(x = Var1, y = Var2, fill = as.factor(pred)),
+                  alpha = 0.2) +
+      geom_point(alpha = 1) +
       ggthemes::scale_color_calc() +
+      ggthemes::scale_fill_calc() + 
       #hrbrthemes::scale_color_ft() +
-      labs(title = "Predicted Classes") +
+      labs(title = "Predicted Classes", color = "", fill = "") +
       #hrbrthemes::theme_ipsum() +
       ggthemes::theme_tufte() + 
       theme(
-        legend.position = "none",
+        legend.position = "bottom",
         plot.title = element_text(size = 15),
         panel.background = element_rect(fill = "gray98", color = "gray90"),
         panel.grid.major = element_line(size = 0.1, color = "gray90")
       )
-  })
+  },height = 450)
   
   #Plot loss ----
   output$loss_plot = renderPlot({
     fit = fit_model()
-    
+    fit = fit$fit
     label1 = paste("Loss:",
                    round(fit$final_metrics$loss, 3))
     label2 = paste("Validation Loss:", 
@@ -345,16 +405,18 @@ server = function(input, output) {
   #Plot accuracy ----
   output$accuracy_plot = renderPlot({
     fit = fit_model()
+    fit = fit$fit
     label1 = paste("Acc:",
                    round(fit$final_metrics$accuracy, 3))
     label2 = paste("Validation Acc:", 
-                   round(fit$validation_metrics$accuracy, 3))
+                   round(fit$final_metrics$val_accuracy, 3))
     first_acc = sort(fit$metrics$accuracy)[1]
     third_acc = sort(fit$metrics$accuracy)[3]
     
     fit$metrics %>%
-    ggplot(aes(x = epoch, y = accuracy)) +
-      geom_line(color = "blue") +
+    ggplot() +
+      geom_line(aes(x = epoch, y = accuracy), color = "blue") +
+      geom_line(aes(x = epoch, y = val_accuracy), color = "red") +
       annotate("text", x = input$epochs-2, y = first_acc, 
                label = label1, color = "blue", alpha = 0.5) +
       annotate("text", x = input$epochs-2, y = third_acc,
@@ -373,10 +435,10 @@ server = function(input, output) {
   metrics = reactive({
     spiral_data  = sim_spiral()
     fit = fit_model()
-
-    perf = classess(truths = spiral_data$label,
-                    predictions = fit$predictions)
-    return(perf)
+    
+    perform = classess(truths = spiral_data$label,
+                    predictions = fit$predict$predictions)
+    return(perform)
   })
   
   #Print confusion matrix ----
