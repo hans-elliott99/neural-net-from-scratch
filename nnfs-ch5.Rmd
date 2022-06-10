@@ -841,11 +841,10 @@ classess = function(truths, predictions){
     #Confusion Matrix
     ##Need to initialize a matrix of the correct length with zeros due to 
     ##possibility of predictions not containing every possible class
-    y_true = y_true + 1 ##cant index using 0 and 1
-    y_hat = y_hat + 1
-      # conf_mat = matrix(0, ##create matrix of 0s of appropriate length
-      #        nrow = length(unique(y_true)), 
-      #        ncol = length(unique(y_true)))
+    if (min(y_true) == 0){ ##if classes are encoded as 0 and 1
+      y_true = y_true + 1 ##cant index using 0 and 1
+      y_hat = y_hat + 1
+    }
     conf_mat = table(y_hat, y_true) #tabulate the predictions and truths
     diff = setdiff(y_true, y_hat) ##figure out which if any class not predicted
     #fill out table if missing class, but order depends on which class
@@ -877,8 +876,10 @@ classess = function(truths, predictions){
     #F1 Score: the harmonic mean of precision and recall
     f1_score = 2 * (m$precision * m$recall) / (m$precision + m$recall)
                   )
+  overall_accuracy = sum(y_hat == y_true) / length(y_true)
     #return
-    list(conf_mat = conf_mat, metrics = m)
+    list(conf_mat = conf_mat, metrics = m,
+         overall_accuracy = overall_accuracy)
     
 #Multiclass Confusion Matrix
   } else if (length(unique(y_true)) > 2){
@@ -894,10 +895,6 @@ classess = function(truths, predictions){
     }
     #Idea source: https://stackoverflow.com/questions/11561856/add-new-row-to-dataframe-at-specific-row-index-not-appended.
     
-      # for (pred in unique(y_hat)){
-      #   for (class in unique(y_true))
-      #   conf_mat[pred, class] = tab[pred, class]
-      # }
     #Format Confusion Matrix
     dimnames(conf_mat) = list("pred"=c(sort(unique(y_true))),
                               "true"=c(sort(unique(y_true)))
@@ -929,9 +926,9 @@ classess = function(truths, predictions){
         metrics[class, "f1_score"] = f1_score
     }
     overall_accuracy = sum(y_hat == y_true) / length(y_true)
-    metrics = cbind(metrics, overall_accuracy)
     #return
-    list(conf_mat = conf_mat, metrics = metrics)
+    list(conf_mat = conf_mat, metrics = metrics,
+         overall_accuracy=overall_accuracy)
   }
 }
 
@@ -1451,7 +1448,7 @@ if (length(baselayers) > 1){
         layer = layers[[current_layer]]$activ)
     } #else if "softmax" once pure softmax is fixed
     
-    if (model[[baselayers[b]]]$dropout_rate == 0){
+    if (model[[b]]$dropout_rate == 0){
       #dropout_rt = FALSE 
       d_layer_todense=activ_backprop
     } else {
@@ -1592,7 +1589,7 @@ if(!is.null(validation_X)){
      }
    }
 
-  ###Utilize the test_model() fn to test on validation data, if provided
+  ###Utilize the test_model() fn to test on validation data
   current_fit = list("parameters" = layer_parameters)
   
   if (is.null(validation_y)){
@@ -1635,31 +1632,22 @@ if(!is.null(validation_X)){
   } 
   
     
-  ## Send the losses to the metrics dataframe for tracking
+  ## Send losses to the metrics dataframe for tracking
   metrics[epoch, "loss"] = loss
   metrics[epoch, "data_loss"] = data_loss
   if (!is.null(validation_X)){
     metrics[epoch, "validation_loss"] = validation_loss
   }
+  ## Also send any validation metrics to the metrics dataframe
+  for (metric in metric_list){
+    value = validation$metrics[[paste0(metric)]]
+    metrics[epoch, paste0("val_",metric)] = value
+  }
   
 }##end epoch loop
   
-#Final Output----
-  final_metrics = list()
-  validation_metrics = list()
-  final_metrics[["loss"]] = loss
-  final_metrics[["data_loss"]] = data_loss
-  if (!is.null(validation_X)){
-    final_metrics[["validation_loss"]] = validation_loss
-  }
-  for (metric in metric_list){
-    final_metrics[[paste0(metric)]] = metrics[epochs, paste0(metric)]
-      if (!is.null(validation_X)){
-        validation_metrics[[paste0(metric)]] =
-                          validation$metrics[[paste0(metric)]]
-      }
-  }
   
+#Final Output----
   ##Save final model parameters
   parameters = list()
   for (b in baselayers){
@@ -1672,33 +1660,33 @@ if(!is.null(validation_X)){
   ##Final Predictions
   ##Need to do a forward pass of the data due to batching
   ##Might just have user use test_model() on training data to generate preds
-  last_fit = list("parameters" = parameters)
-  make_prediction = test_model(model = model,
-                               trained_model = last_fit,
-                               X_test = inputs,
-                               y_test = y_true
-                               ) 
-  raw_predictions = make_prediction$raw_predictions
-  predictions = make_prediction$predictions 
+  # last_fit = list("parameters" = parameters)
+  # make_prediction = test_model(model = model,
+  #                              trained_model = last_fit,
+  #                              X_test = inputs,
+  #                              y_test = y_true
+  #                              ) 
+  # raw_predictions = make_prediction$raw_predictions
+  # predictions = make_prediction$predictions 
   
-  
-  # raw_predictions = layers[[length(layers)]]$output$output
-  # if (loss_fn=="categorical_crossentropy"){
-  #   predictions = max.col(raw_predictions, ties.method = "random")
-  # } else if (loss_fn=="binary_crossentropy"){
-  #   predictions = (raw_predictions > 0.5) * 1 
-  # }
-  # else {
-  #   if (ncol(raw_predictions) > 1){
-  #     ##if using multiple output neurons for a regression or binary problem...
-  #     ##this is temporary, may want to change
-  #     predictions = rowMeans(raw_predictions)
-  #   } else predictions = raw_predictions
-  # }
+  ##Final Metrics
+  final_metrics = list()
+  final_metrics[["loss"]] = loss
+  final_metrics[["data_loss"]] = data_loss
+  if (!is.null(validation_X)){
+    final_metrics[["validation_loss"]] = validation_loss
+  }
+  for (metric in metric_list){ ##from the final epoch
+    final_metrics[[paste0(metric)]] = metrics[epochs, paste0(metric)]
+      if (!is.null(validation_X)){
+        final_metrics[[paste0("val_",metric)]] =
+                          validation$metrics[[paste0(metric)]]
+      }
+  }
+
   ##Returns
-  list(final_metrics=final_metrics, validation_metrics=validation_metrics,
-       metrics=metrics, 
-       predictions=predictions, raw_predictions=raw_predictions,
+  list(final_metrics=final_metrics,
+       metrics=metrics,
        parameters=parameters)
 }
 
@@ -1906,13 +1894,6 @@ if(!is.null(y_true)){
 
 ```
 
-TODO: 
-- figure out why adding more layers didnt work
-
-
-
-
-
 
 Now we can run the same training loop as above with just a few lines of code.  
 
@@ -2001,6 +1982,9 @@ categ_model = initialize_model() |>
   add_dense(n_inputs = ncol(X), n_neurons = 128, dropout_rate = 0.01,
             weight_L2 = 5e-4, bias_L2 = 5e-4) |>
   add_activation("relu") |>
+  add_dense(n_inputs = 128, n_neurons = 128, dropout_rate = 0.01,
+            weight_L2 = 5e-4, bias_L2 = 5e-4) |>
+  add_activation("relu") |>
   add_dense(n_inputs = 128, n_neurons = 64, dropout_rate = 0.001,
             weight_L2 = 5e-4, bias_L2 = 5e-4) |>
   add_activation("relu") |>
@@ -2032,48 +2016,52 @@ legend(x = "topleft", legend = c("training", "validation"),
 ```
 The model's performance suffers slighltly when using batches, but this will be useful for larger datasets.  
 
+To get predictions for the training data, we can "test" the model on the training data.
+```{r}
+train_pred = test_model(model = categ_model,
+                         trained_model = fit_categ,
+                         X_test = X, y_test = y_true,
+                         metric_list = "accuracy")
+```
+
+
 Let's check out the performance of the model using the `classess()` function:  
 
 ```{r}
 classification_assessment = classess(truths = spiral_data$label,
-                                     predictions = fit_categ$predictions)
+                                     predictions = train_pred$predictions)
 ## Confusion Matrix (multiclass)
 classification_assessment$conf_mat
 
 ## Metrics
 classification_assessment$metrics
-
 ```
-Note that the accuracies are different than if we just looked at the proportion of correctly guessed labels, which is what the `train_model()` function does to calculate overall accuracy:
+Note that the accuracies for each class are different than if we just looked at the proportion of correctly guessed labels, which is what the `train_model()` and `test_model()` functions do to calculate overall accuracy:
 ```{r}
 # sum of where labels = predicted labels / total labels
-sum(spiral_data$label == fit_categ$predictions)/length(spiral_data$label)
+sum(spiral_data$label == train_pred$predictions)/length(spiral_data$label)
 ```
 This is due to how the `classess()` function handles assessment of multiclass classification models. It calculates the accuracy for class $i$, treating all other classes $j \neq i$ as one negative class, effectively simplifying the problem to that of a binary classification task. This gives us a more granular understanding of the model's performance at predicting each class.  
 
 
 
-Let's test our last categorical model on testing data.  
+Let's test our last categorical model on testing data. This is to simulate making final predictions, onto data which we do not know the classes of.   
+This time, we will simply ignore the `y_test` argument.
 
 ```{r}
-# First make some testing data
+# First make some testing data----
 test_data = sim_data_fn(200, K=3) ##600 samples, bigger than the training data!
 X_test = as.matrix(test_data[,c("x","y")])
-y_test = test_data$label
 
 # Now run the test_model function
 #options(error=recover); debug(test_model)
 final_categ = test_model(model = categ_model,
                          trained_model = fit_categ,
-                         X_test = X_test, y_test = y_test,
+                         X_test = X_test,
                          metric_list = "accuracy")
 
-
-final_categ$metrics
-final_categ$loss
-
 #True test data
-plot(X_test, col = y_test)
+plot(X_test, col = test_data$label)
 
 #Predicted test data
 plot(X_test, col = final_categ$predictions)
@@ -2090,17 +2078,43 @@ plot(x = 1 - roc$specificity, y = roc$sensitivity, col = roc$.level,
 
 ```
 
-If we are predicting onto new, unlabeled data, we can simply ignore the y_test argument and test_model() will still provide predictions:
 
 ```{r}
-##Predict onto "unlabeled" data
-predict = test_model(model = categ_model,
-                     trained_model = fit_categ,
-                     X_test = X_test)
-predict$predictions
+# print_model() ----
+print_model = function(model){
+  ##How many unique "base layers" (dense layers)  
+  baselayers = c()
+  for (i in seq_along(model)){
+    base_i = model[[i]]$base_layer
+    baselayers = c(baselayers, base_i)
+  }
+  baselayers = unique(baselayers) ##return vector of each baselayer position
+  
+  #Extract information from each layer and format 
+  model_print = data.frame()
+  for (b in baselayers){
+    layer_b = c(
+      inputs = model[[b]]$n_inputs,
+      neurons = model[[b]]$n_neurons,
+      weights_L1 = model[[b]]$weight_L1,
+      weights_L2 = model[[b]]$weight_L2,
+      biases_L1 = model[[b]]$bias_L1,
+      biases_L2 = model[[b]]$bias_L2,
+      dropout = model[[b]]$dropout_rate,
+      activation = model[[b+1]]$class
+    )
+    model_print = rbind(model_print, layer_b)
+  }
+  model_print = cbind(layer = 1:length(baselayers), model_print)
+  colnames(model_print) = c("layer","inputs","neurons","weights_L1",
+                         "weights_L2","biases_L1","biases_L2",
+                         "dropout","activation")
+  #Last layer is a loss layer
+  loss = model[[length(model)]]$class
+  
+  list("network"=model_print, "loss"=loss)
+}
 
-
-plot(x = X_test, col = predict$predictions)
 ```
 
 
