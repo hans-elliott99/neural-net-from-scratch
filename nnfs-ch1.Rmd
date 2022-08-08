@@ -945,40 +945,40 @@ head(spiral_data$label)
 
 ```{r one-hot-encoder}
 #Let's try one-hot encoding the labels to check our function
-    labels_ohe = do.call(rbind, 
-        lapply(spiral_data$label, 
-               function(i) as.integer(
-                 !is.na(match(unique(
-                   unlist(spiral_data$label)
-                                    ), i)
-                   ))
-              ))
+labels_ohe = do.call(rbind, 
+    lapply(spiral_data$label, 
+           function(i) as.integer(
+             !is.na(match(unique(
+               unlist(spiral_data$label)
+                                ), i)
+               ))
+          ))
 ```
 
 ```{r anti-onehot}
 ##Make function that turns one-hot encoded array into vector of discrete classes
 
-    #y_true_vector = c(1, 2, 2)
-    y_true = rbind(c(1, 0, 0), #(a y_true that is one-hot encoded)
-                   c(0, 1, 0),
-                   c(0, 1, 0))
+#y_true_vector = c(1, 2, 2)
+y_true = rbind(c(1, 0, 0), #(a y_true that is one-hot encoded)
+               c(0, 1, 0),
+               c(0, 1, 0))
 
-    anti_ohe = function(y_true){
-               unique_classes = ncol(y_true)
-               samples = nrow(y_true)
-               y_true_vec = as.vector(y_true)
-                    
-               class_key = rep(1:unique_classes, each = samples)
-               y_true = class_key[y_true_vec==1]
-                    #selects the classes that correspond to 1s in y_true vector
-                    return(y_true)
-                    }
-    
-    y_true = if(nrow(y_true) > 1){ #if one-hot encoded
-                    #change to sparse
-                    anti_ohe(y_true)
-              }
-    
+anti_ohe = function(y_true){
+           unique_classes = ncol(y_true)
+           samples = nrow(y_true)
+           y_true_vec = as.vector(y_true)
+                
+           class_key = rep(1:unique_classes, each = samples)
+           y_true = class_key[y_true_vec==1]
+                #selects the classes that correspond to 1s in y_true vector
+                return(y_true)
+                }
+
+y_true = if(nrow(y_true) > 1){ #if one-hot encoded
+                #change to sparse
+                anti_ohe(y_true)
+          }
+
 y_true
 ```
 
@@ -1296,7 +1296,99 @@ And combine these operations:
 diag(softmax_output) - softmax_output%*%t(softmax_output)
 ```
 
-Worth noting that the resulting matrix is known as a _Jacobian Matrix_, which is a matrix of partial derivatives in all of the combinations of both input vectors. In the book, the show how to implement these steps into the backpropagation, but also reveal a faster & easier to code method.
+Worth noting that the resulting matrix is known as a _Jacobian Matrix_, which is a matrix of partial derivatives in all of the combinations of both input vectors. 
+
+
+```{r}
+# Forward
+## activation_Softmax$forward(inputs) produces:
+softmax_output = rbind(c(0.7, 0.1, 0.2),
+                       c(0.2, 0.3, 0.5)) ##(2 samples)
+softmax_output
+
+# Backprop
+##Derivatives from previously backpropd function
+dvalues = matrix(rnorm(6), 2, 3)
+
+##Create zero array the shape of the dvalues to be filled in
+dinputs = matrix(0, nrow=nrow(dvalues), ncol=ncol(dvalues))
+##Going sample by sample (row by row) select 1 sample's output and the dvalues
+##But convert each row to a column vector
+single_output = matrix(softmax_output[1,]) 
+single_dvalues = matrix(dvalues[1, ])
+single_output
+  
+# Calculate jacobian matrix of output
+##Note: need to convert single_output to simple vector with c() for diag to work
+jacobian_matrix = diag(c(single_output)) - (single_output %*% t(single_output)) 
+jacobian_matrix #3x1 vector %*% 1x3 vector produces a 3x3 matrix
+
+# Calculate sample-wise gradient (chain rule), add to array of gradients (as a row)
+##Note: The jacobian is a 3x3 matrix and the dvalues is a list of 3 numbers. It 
+##had to be converted to a 3x1 vector since a 3x3 can't multiply with a 1x3.
+##Also, the result is a 3x1 vector but we replace the row in dinputs, so use c()
+##to convert to row
+dinputs[1,] = c(jacobian_matrix %*% single_dvalues) 
+  #then repeat with next sample...
+
+
+dinputs
+```
+
+
+```{r}
+activation_Softmax = list(
+  forward = function(inputs){
+          #scale inputs
+          max_value = apply(X = inputs, MARGIN = 2,  FUN = max)
+          scaled_inputs = sapply(X = 1:ncol(inputs), 
+                 FUN = function(X){
+                    inputs[,X] - abs(max_value[X])})
+          # exponetiate
+          exp_values = exp(scaled_inputs)
+          # normalize
+          norm_base = matrix(rowSums(exp_values),
+                             nrow = nrow(inputs), ncol = 1)
+          probabilities = sapply(X = 1:nrow(inputs),
+                          FUN = function(X){exp_values[X,]/norm_base[X]}) 
+          return(t(probabilities))
+          #(transpose probabilities)
+          },
+  
+  backward = function(softmax_output, dvalues){
+    # Create zero array the shape of the dvalues
+    dinputs = matrix(0, nrow=nrow(dvalues), ncol=ncol(dvalues))
+    # Enumerate outputs and gradients
+    for (i in 1:nrow(softmax_output)){
+      ##ensure sure column vectors with matrix
+      single_output = matrix(softmax_output[i,]) 
+      single_dvalues = matrix(dvalues[i, ])
+      
+      # Calculate jacobian matrix of output
+      ##Note: convert single_output to simple row vector with c() for diag to work
+      jacobian_matrix = diag(c(single_output)) - (single_output %*% t(single_output)) 
+      # Calculate sample-wise gradient & add to array of gradients (as a row)
+      dinputs[i,] = c(jacobian_matrix %*% single_dvalues)
+    }
+    return(dinputs)
+  }
+)
+
+#Example
+inputs = matrix(rnorm(9), 3, 3)
+softmax_output = activation_Softmax$forward(inputs)
+backprop_dvalues = activation_Softmax$backward(softmax_output,
+                                               dvalues = matrix(rnorm(9),3,3)
+                                               #(inherited from previos backprop)
+                                               )
+
+backprop_dvalues
+```
+
+
+
+
+There is also a faster & easier to code method.  
 Essentially, **we can combine the derivation of Categorical Cross-Entropy derivatives and Softmax activation derivatives by applying the chain rule to calculate the partial derivative of the Categorical Cross-Entropy loss function with respect to the Softmax function inputs.** This simplifies significantly to:  
 $\hat y_{i,k} - y_{i,k} $, or the predicted predicted minus the true values.  
 We'll add that as an extra option for an activation function, utilizing the other functions we've already built, like so:
